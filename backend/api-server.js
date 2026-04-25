@@ -96,8 +96,9 @@ app.get('/api/stats', (req, res) => {
     }
     const seasonSummary = seasonsMap.get(season);
     seasonSummary.totalStays++;
-    // FIX: use stay, not season object (was variable shadowing bug)
-    seasonSummary.totalRevenue += getPrice(stay);
+    if (stay.status === 'confirmed' || stay.status === 'paid') {
+      seasonSummary.totalRevenue += getPrice(stay);
+    }
     seasonSummary.occupancyWeeks += (stay.nights || 0) / 7;
   }
 
