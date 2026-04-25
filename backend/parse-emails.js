@@ -233,8 +233,8 @@ async function processEmails() {
   const markParsed = db.prepare('UPDATE emails SET parsed = 1 WHERE id = ?');
   let parsed = 0, contacts = 0, stays = 0, replies = 0;
 
-  for (let i = 0; i < emails.length; i += 10) {
-    const batch = emails.slice(i, i + 10);
+  for (let i = 0; i < emails.length; i += 15) {
+    const batch = emails.slice(i, i + 15);
 
     await Promise.all(batch.map(async (email) => {
       try {
@@ -271,16 +271,16 @@ async function processEmails() {
           stays++;
         }
 
-        // Si demande + besoin de réponse → créer une auto-reply en attente
-        if (result.needs_reply && result.email_type !== 'confirmation' && result.email_type !== 'other') {
-          const reply = await generateAutoReply(email);
-          if (reply.should_reply) {
-            db.prepare(`INSERT INTO auto_replies (id, email_id, contact_id, reply_type, reply_subject, reply_body, alternative_weeks, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'))`)
-              .run(generateId(), email.id, contactId, reply.reply_type, reply.reply_subject || '', reply.reply_body || '',
-                   JSON.stringify(reply.alternative_weeks || []));
-            replies++;
-          }
-        }
+        // 🚫 Auto-reply disabled during initial batch parsing — will regenerate later
+        // if (result.needs_reply && result.email_type !== 'confirmation' && result.email_type !== 'other') {
+        //   const reply = await generateAutoReply(email);
+        //   if (reply.should_reply) {
+        //     db.prepare(`INSERT INTO auto_replies (id, email_id, contact_id, reply_type, reply_subject, reply_body, alternative_weeks, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'))`)
+        //       .run(generateId(), email.id, contactId, reply.reply_type, reply.reply_subject || '', reply.reply_body || '',
+        //            JSON.stringify(reply.alternative_weeks || []));
+        //     replies++;
+        //   }
+        // }
 
         markParsed.run(email.id);
         parsed++;

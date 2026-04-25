@@ -101,7 +101,12 @@ app.get('/api/stats', (req, res) => {
 
 app.get('/api/emails', (req, res) => {
   const rows = db.prepare('SELECT * FROM emails ORDER BY date DESC').all();
-  res.json(rows.map(toCamel));
+  res.json(rows.map(r => ({
+    ...toCamel(r),
+    id: String(r.id),
+    isFromGuest: r.mailbox === 'INBOX',
+    threadId: null,
+  })));
 });
 
 // ─── GET /api/contacts ────────────────────────────

@@ -150,7 +150,18 @@ db.exec(`
 function extractBodyText(sourceBuffer) {
   if (!sourceBuffer) return '';
   try {
-    const raw = sourceBuffer.toString('utf-8');
+    // D'abord essayer de détecter si le buffer est en latin1 mal interprété
+    // On essaie de décoder en UTF-8 d'abord
+    let raw;
+    try {
+      raw = new TextDecoder('utf-8', { fatal: false }).decode(sourceBuffer);
+    } catch {
+      raw = sourceBuffer.toString('utf-8');
+    }
+    // Si on voit des caractères Ã© Ã¨ Ã§ etc, c'est que le buffer était en latin1
+    if (/Ã[©¨ª«¬­®°±²³´µ¶·¸¹º»¼½¾¿À-ÿ]/.test(raw)) {
+      raw = new TextDecoder('latin1').decode(sourceBuffer);
+    }
     // Diviser en lignes
     const lines = raw.split(/\r?\n/);
 
@@ -223,15 +234,47 @@ function extractBodyText(sourceBuffer) {
 }
 
 function decodeQuotedPrintable(str) {
-  return str
-    .replace(/=\r?\n/g, '')       // Soft line breaks
-    .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''); // Remove control chars
+  // D'abord gérer les soft line breaks
+  let decoded = str
+    .replace(/=\r?\n/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+
+  // Remplacer les séquences =XX par des bytes
+  const bytes = [];
+  for (let i = 0; i < decoded.length; i++) {
+    if (decoded[i] === '=' && i + 2 < decoded.length) {
+      const hex = decoded.substr(i + 1, 2);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        bytes.push(parseInt(hex, 16));
+        i += 2;
+        continue;
+      }
+    }
+    bytes.push(decoded.charCodeAt(i));
+  }
+  // Convertir les bytes en string UTF-8
+  return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
 }
 
 function cleanBody(str) {
+  // Fix les caractères UTF-8 mal interprétés (latin1 sur utf-8)
+  // Par ex: Ã© → é, Ã¨ → è, Ã§ → ç, Ã¤ → ä
+  const utf8FixMap = {
+    'Ã©': 'é', 'Ã¨': 'è', 'Ãª': 'ê', 'Ã«': 'ë',
+    'Ã ': 'à', 'Ã¢': 'â', 'Ã¤': 'ä',
+    'Ã¹': 'ù', 'Ã»': 'û', 'Ã¼': 'ü',
+    'Ã´': 'ô', 'Ã¶': 'ö',
+    'Ã®': 'î', 'Ã¯': 'ï',
+    'Ã§': 'ç',
+    'Å“': 'œ', 'Å’': 'Œ',
+    '\\\\xc3\\\\xa9': 'é', '\\\\xc3\\\\xa8': 'è',
+  };
+  for (const [bad, good] of Object.entries(utf8FixMap)) {
+    str = str.split(bad).join(good);
+  }
+
   return str
-    .replace(/<[^>]*>/g, '')           // Remove HTML tags
+    .replace(/<[^>]*>/g, '')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
