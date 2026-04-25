@@ -120,6 +120,7 @@ export interface DashboardStats {
   averagePrice: number;
   occupancyRate: number;
   upcomingStays: number;
+  emailsReceivedThisMonth: number;
   newInquiries: number;
   pendingReplies: number;
   seasons: SeasonSummary[];

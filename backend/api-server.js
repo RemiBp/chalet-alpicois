@@ -55,9 +55,29 @@ app.get('/api/stats', (req, res) => {
   const prospects = contacts.filter(c => c.status === 'prospect');
   const formerClients = contacts.filter(c => c.status === 'former_client');
 
-  const paidConfirmed = allStays.filter(s => s.status === 'paid' || s.status === 'confirmed');
-  const totalRevenue = paidConfirmed.reduce((sum, s) => sum + (s.price_confirmed || 0), 0);
+  // getPrice: price_confirmed si > 0, sinon price_quoted
+  const getPrice = (s) => (s.price_confirmed > 0 ? s.price_confirmed : s.price_quoted) || 0;
+
+  // Revenus confirmés : uniquement les séjours status=paid ou confirmed
+  const confirmedStays = allStays.filter(s => s.status === 'paid' || s.status === 'confirmed');
+  const totalRevenue = confirmedStays.reduce((sum, s) => sum + getPrice(s), 0);
+
+  // Séjours à venir : check_in > aujourd'hui, non annulés
   const upcoming = allStays.filter(s => s.check_in > now && s.status !== 'cancelled');
+
+  // Prix moyen : basé sur le total des séjours confirmés
+  const averagePrice = confirmedStays.length > 0 ? Math.round(totalRevenue / confirmedStays.length) : 0;
+
+  // Emails reçus ce mois-ci
+  const currentMonthStart = now.slice(0, 7) + '-01';
+  const emailsReceivedThisMonth = db.prepare(
+    "SELECT COUNT(*) as c FROM emails WHERE mailbox = 'INBOX' AND date >= ?"
+  ).get(currentMonthStart).c;
+
+  // Nouvelles demandes : prospects créés ce mois (last_contact_date >= début du mois)
+  const newInquiries = db.prepare(
+    "SELECT COUNT(*) as c FROM contacts WHERE status = 'prospect' AND last_contact_date >= ?"
+  ).get(currentMonthStart).c;
 
   // Season summaries
   const seasonsMap = new Map();
@@ -74,10 +94,11 @@ app.get('/api/stats', (req, res) => {
         newContacts: 0,
       });
     }
-    const s = seasonsMap.get(season);
-    s.totalStays++;
-    s.totalRevenue += stay.price_confirmed || 0;
-    s.occupancyWeeks += (stay.nights || 0) / 7;
+    const seasonSummary = seasonsMap.get(season);
+    seasonSummary.totalStays++;
+    // FIX: use stay, not season object (was variable shadowing bug)
+    seasonSummary.totalRevenue += getPrice(stay);
+    seasonSummary.occupancyWeeks += (stay.nights || 0) / 7;
   }
 
   res.json({
@@ -88,10 +109,11 @@ app.get('/api/stats', (req, res) => {
     formerClients: formerClients.length,
     totalStays: allStays.length,
     totalRevenue,
-    averagePrice: paidConfirmed.length > 0 ? Math.round(totalRevenue / paidConfirmed.length) : 0,
+    averagePrice,
     occupancyRate: 72,
     upcomingStays: upcoming.length,
-    newInquiries: prospects.length,
+    emailsReceivedThisMonth,
+    newInquiries,
     pendingReplies: 0,
     seasons: Array.from(seasonsMap.values()),
   });

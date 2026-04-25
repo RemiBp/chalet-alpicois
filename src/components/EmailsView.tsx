@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, RefreshCw, Inbox, Send, ChevronRight, Mail, MailOpen, ArrowLeft, Calendar, Eye, EyeOff } from 'lucide-react';
+import { Search, RefreshCw, Inbox, Send, Mail, ArrowLeft } from 'lucide-react';
 import type { Email } from '../types';
 import { fetchEmails } from '../data';
 

@@ -29,7 +29,7 @@ async function deepseekChat(messages, options = {}) {
       'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
     },
     body: JSON.stringify({
-      model: options.model || 'deepseek-chat',
+      model: options.model || 'deepseek-v4-flash',
       messages,
       temperature: options.temperature ?? 0.3,
       max_tokens: options.maxTokens ?? 800,

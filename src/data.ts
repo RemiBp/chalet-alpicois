@@ -437,6 +437,7 @@ export function getDashboardStats(): DashboardStats {
     averagePrice: paidConfirmed.length > 0 ? Math.round(totalRevenue / paidConfirmed.length) : 0,
     occupancyRate: 72,
     upcomingStays: upcoming.length,
+    emailsReceivedThisMonth: 0,
     newInquiries: prospects.length,
     pendingReplies: 0,
     seasons: Array.from(seasonsMap.values()),

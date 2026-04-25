@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Bot, Send, Check, X, MessageSquare, Plus, Trash2,
-  ToggleLeft, ToggleRight, ChevronDown, ChevronUp, Mail, RefreshCw,
+  ToggleLeft, ToggleRight, ChevronDown, ChevronUp, Mail,
 } from 'lucide-react';
 import { fetchAutoReplies, fetchAutoReplyRules, approveReply, sendReply, cancelReply, createAutoReplyRule, toggleAutoReplyRule, deleteAutoReplyRule } from '../data';
 import type { AutoReply, AutoReplyRule, ReplyType } from '../types';
@@ -236,7 +236,7 @@ function RuleCard({ rule, onToggle, onDelete }: { rule: AutoReplyRule; onToggle:
 // ============ MAIN COMPONENT ============
 
 export default function AutoReplyView() {
-  const [tab, setTab] = useState<'pending' | 'rules'>('pending');
+  const [tab, setTab] = useState<'pending' | 'rules' | 'history'>('pending');
   const [replies, setReplies] = useState<AutoReply[]>([]);
   const [rules, setRules] = useState<AutoReplyRule[]>([]);
   const [loading, setLoading] = useState(true);

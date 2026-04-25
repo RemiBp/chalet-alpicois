@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Users, Euro, Bed, CheckCircle, Clock, XCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Users, Bed, CheckCircle, Clock, XCircle } from 'lucide-react';
 import { fetchContacts, fetchStays } from '../data';
 import type { Contact, StayRecord } from '../types';
 
@@ -25,14 +25,6 @@ function getSeasonLabel(season: string): string {
   return `Hiver ${start}-${end}`;
 }
 
-function getSeasonMonths(season: string): { start: Date; end: Date } {
-  const [startYear] = season.split('-').map(Number);
-  return {
-    start: new Date(startYear, 9, 1),  // Octobre
-    end: new Date(startYear + 1, 4, 31), // Mai
-  };
-}
-
 const monthNames = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 
 const statusConfig: Record<string, { bg: string; text: string; label: string; icon: any }> = {
@@ -45,7 +37,7 @@ const statusConfig: Record<string, { bg: string; text: string; label: string; ic
 
 // ─── SEASON VIEW ──────────────────────────────────
 
-function SeasonView({ stays, contacts }: { stays: (StayRecord & { guestName: string; contactEmail: string })[]; contacts: Contact[] }) {
+function SeasonView({ stays }: { stays: (StayRecord & { guestName: string; contactEmail: string })[] }) {
   // Grouper par saison
   const seasons = useMemo(() => {
     const map = new Map<string, (StayRecord & { guestName: string; contactEmail: string })[]>();
@@ -337,7 +329,6 @@ export default function CalendarView() {
 
   // Enrichir les stays avec le nom du contact
   const allStays = useMemo(() => {
-    const contactMap = new Map(contacts.map(c => [c.id, c]));
     // D'abord via les stays intégrés aux contacts
     const fromContacts = contacts.flatMap(c =>
       c.stays.map(s => ({ ...s, guestName: c.name, contactEmail: c.email }))
@@ -431,7 +422,7 @@ export default function CalendarView() {
           </motion.div>
         ) : (
           <motion.div key="season" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <SeasonView stays={allStays} contacts={contacts} />
+            <SeasonView stays={allStays} />
           </motion.div>
         )}
       </AnimatePresence>

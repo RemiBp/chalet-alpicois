@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { TrendingUp, Users, CalendarDays, Euro, Bell, ArrowUpRight, ArrowDownRight, Mail, CheckCircle, Clock } from 'lucide-react';
+import { TrendingUp, Users, CalendarDays, Euro, Bell, ArrowUpRight, ArrowDownRight, Mail } from 'lucide-react';
 import { fetchDashboardStats, fetchEmails, fetchContacts, fetchStays } from '../data';
-import type { DashboardStats, Email, Contact, StayRecord } from '../types';
+import type { DashboardStats, Email, StayRecord } from '../types';
 
 // ─── HELPERS ──────────────────────────────────────
 
@@ -171,8 +171,6 @@ export default function Dashboard() {
     );
   }
 
-  const totalWithPrice = upcomingStays.filter(s => s.priceConfirmed > 0 || s.priceQuoted > 0).length;
-
   return (
     <motion.div
       variants={container}
@@ -198,11 +196,12 @@ export default function Dashboard() {
         marginBottom: 24,
       }}>
         <StatCard icon={Euro} label="Revenus (confirmés)" value={stats.totalRevenue.toLocaleString('fr-FR')} suffix=" €" color="#d97706" />
-        <StatCard icon={CalendarDays} label="Séjours confirmés" value={stats.totalStays} color="#2563eb" />
+        <StatCard icon={CalendarDays} label="Séjours totaux" value={stats.totalStays} color="#2563eb" />
         <StatCard icon={TrendingUp} label="Prix moyen" value={stats.averagePrice.toLocaleString('fr-FR')} suffix=" €" color="#059669" />
         <StatCard icon={Users} label="Clients" value={stats.clients} color="#7c3aed" />
         <StatCard icon={Bell} label="Prospects" value={stats.prospects} color="#ea580c" />
-        <StatCard icon={Mail} label="Emails reçus" value={recentEmails.length > 0 ? `${recentEmails.length}+` : '0'} suffix="" color="#0891b2" />
+        <StatCard icon={Mail} label="Emails reçus ce mois" value={stats.emailsReceivedThisMonth || 0} color="#0891b2" />
+        <StatCard icon={ArrowUpRight} label="Nouvelles demandes" value={stats.newInquiries || 0} color="#059669" />
       </div>
 
       {/* Two columns: Recent emails + Upcoming stays */}
