@@ -1,18 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Users, Bed, CheckCircle, Clock, XCircle, Euro } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle, Clock, XCircle } from 'lucide-react';
 import { fetchContacts, fetchStays } from '../data';
 import type { Contact, StayRecord } from '../types';
 
 // ─── HELPERS ──────────────────────────────────────
-
-function getWeekNumber(date: Date): number {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-}
 
 function formatDateShort(dateStr: string): string {
   const d = new Date(dateStr);
@@ -25,175 +17,109 @@ function getSeasonLabel(season: string): string {
   return `Hiver ${start}-${end}`;
 }
 
+function getWeekStart(dateStr: string): string {
+  const d = new Date(dateStr);
+  const day = d.getDay(); // 0=dim
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().split('T')[0];
+}
+
 const monthNames = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 
-const statusConfig: Record<string, { bg: string; text: string; label: string; icon: any }> = {
-  confirmed: { bg: '#ecfdf5', text: '#059669', label: 'Confirmé', icon: CheckCircle },
-  paid: { bg: '#e0f2fe', text: '#0284c7', label: 'Payé', icon: CheckCircle },
-  pending: { bg: '#fef3c7', text: '#d97706', label: 'En attente', icon: Clock },
-  cancelled: { bg: '#fef2f2', text: '#dc2626', label: 'Annulé', icon: XCircle },
-  no_show: { bg: '#fef2f2', text: '#dc2626', label: 'Absent', icon: XCircle },
+const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
+  confirmed: { bg: '#ecfdf5', text: '#059669', label: 'Confirmé' },
+  paid: { bg: '#e0f2fe', text: '#0284c7', label: 'Payé' },
+  pending: { bg: '#fef3c7', text: '#d97706', label: 'En attente' },
+  cancelled: { bg: '#fef2f2', text: '#dc2626', label: 'Annulé' },
 };
 
 // ─── SEASON VIEW ──────────────────────────────────
 
-function SeasonView({ stays }: { stays: (StayRecord & { guestName: string; contactEmail: string })[] }) {
-  // Grouper par saison
+function SeasonView({ weeks }: { weeks: { season: string; weekStart: string; guestName: string; price: number; status: string; checkIn: string; checkOut: string }[] }) {
   const seasons = useMemo(() => {
-    const map = new Map<string, (StayRecord & { guestName: string; contactEmail: string })[]>();
-    for (const s of stays) {
-      const season = s.season || 'Inconnue';
-      if (!map.has(season)) map.set(season, []);
-      map.get(season)!.push(s);
+    const map = new Map<string, typeof weeks>();
+    for (const w of weeks) {
+      if (!map.has(w.season)) map.set(w.season, []);
+      map.get(w.season)!.push(w);
     }
-    // Trier par saison décroissante
     return Array.from(map.entries())
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([season, seasonStays]) => ({
-        season,
-        label: getSeasonLabel(season),
-        stays: seasonStays.sort((a, b) => new Date(a.checkIn).getTime() - new Date(b.checkIn).getTime()),
-      }));
-  }, [stays]);
+      .map(([season, items]) => ({ season, label: getSeasonLabel(season), weeks: items.sort((a, b) => a.weekStart.localeCompare(b.weekStart)) }));
+  }, [weeks]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
-      {seasons.map(({ season, label, stays: seasonStays }) => {
-        const totalRevenue = seasonStays.reduce((sum, s) => sum + (s.priceConfirmed || s.priceQuoted || 0), 0);
-        const confirmed = seasonStays.filter(s => s.status === 'confirmed' || s.status === 'paid').length;
-        const totalNights = seasonStays.reduce((sum, s) => sum + (s.nights || 7), 0);
-
+      {seasons.map(({ season, label, weeks: seasonWeeks }) => {
+        const totalRevenue = seasonWeeks.reduce((sum, w) => sum + w.price, 0);
         return (
           <div key={season}>
-            {/* Season header */}
             <div style={{ marginBottom: 16 }}>
               <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>{label}</h2>
               <div style={{ display: 'flex', gap: 16, marginTop: 6 }}>
                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {seasonStays.length} séjour{seasonStays.length > 1 ? 's' : ''}
-                </span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {confirmed} confirmé{confirmed > 1 ? 's' : ''}
+                  {seasonWeeks.length} semaine{seasonWeeks.length > 1 ? 's' : ''}
                 </span>
                 <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--success, #059669)' }}>
                   {totalRevenue.toLocaleString('fr-FR')}€
                 </span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {totalNights} nuit{totalNights > 1 ? 's' : ''}
-                </span>
               </div>
             </div>
 
-            {/* Stays list */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {seasonStays.map((stay, i) => {
-                const cfg = statusConfig[stay.status] || statusConfig.pending;
-                const Icon = cfg.icon;
-                const price = stay.priceConfirmed || stay.priceQuoted || 0;
-
+              {seasonWeeks.map((w, i) => {
+                const cfg = statusConfig[w.status] || statusConfig.pending;
                 return (
                   <motion.div
-                    key={stay.id}
+                    key={w.weekStart}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: i * 0.03 }}
                     style={{
-                      background: 'var(--bg-surface)',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border-color)',
-                      padding: '12px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 16,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
+                      background: 'var(--bg-surface)', borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-color)', padding: '12px 16px',
+                      display: 'flex', alignItems: 'center', gap: 16,
                     }}
-                    onMouseOver={e => { e.currentTarget.style.borderColor = cfg.text; e.currentTarget.style.boxShadow = `0 0 0 1px ${cfg.text}20`; }}
-                    onMouseOut={e => { e.currentTarget.style.borderColor = 'var(--border-color)'; e.currentTarget.style.boxShadow = 'none'; }}
                   >
-                    {/* Date block */}
                     <div style={{
-                      textAlign: 'center',
-                      minWidth: 60,
-                      padding: '6px 10px',
-                      borderRadius: 8,
-                      background: cfg.bg,
+                      textAlign: 'center', minWidth: 80, padding: '6px 10px',
+                      borderRadius: 8, background: cfg.bg,
                     }}>
-                      <div style={{ fontSize: 10, color: cfg.text, fontWeight: 600 }}>
-                        Sem {getWeekNumber(new Date(stay.checkIn))}
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 700, marginTop: 1 }}>
-                        {formatDateShort(stay.checkIn)}
+                      <div style={{ fontSize: 10, color: cfg.text, fontWeight: 600 }}>Semaine</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-primary)', fontWeight: 700, marginTop: 1 }}>
+                        {formatDateShort(w.checkIn)}
                       </div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>
-                        → {formatDateShort(stay.checkOut)}
+                        → {formatDateShort(w.checkOut)}
                       </div>
                     </div>
 
-                    {/* Guest info */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                        {stay.guestName || 'Inconnu'}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--text-muted)' }}>
-                          <Users size={10} />
-                          {stay.adults + stay.children} pers. ({stay.adults}A + {stay.children}E)
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--text-muted)' }}>
-                          <Bed size={10} />
-                          {stay.nights || 7} nuits
-                        </span>
+                        {w.guestName}
                       </div>
                     </div>
 
-                    {/* Price */}
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>
-                        {price > 0 ? `${price.toLocaleString('fr-FR')}€` : '—'}
+                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>
+                        {w.price > 0 ? `${w.price.toLocaleString('fr-FR')}€` : '—'}
                       </div>
-                      {price > 0 && stay.nights > 0 && (
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>
-                          {Math.round(price / (stay.nights || 7))}€/nuit
-                        </div>
-                      )}
                     </div>
 
-                    {/* Status badge */}
                     <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '4px 8px',
-                      borderRadius: 6,
-                      background: cfg.bg,
-                      fontSize: 10,
-                      fontWeight: 600,
-                      color: cfg.text,
-                      whiteSpace: 'nowrap',
+                      display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px',
+                      borderRadius: 6, background: cfg.bg, fontSize: 10, fontWeight: 600,
+                      color: cfg.text, whiteSpace: 'nowrap',
                     }}>
-                      <Icon size={10} />
                       {cfg.label}
                     </div>
                   </motion.div>
                 );
               })}
-
-              {seasonStays.length === 0 && (
-                <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-                  Aucun séjour cette saison
-                </div>
-              )}
             </div>
           </div>
         );
       })}
-
-      {seasons.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-muted)' }}>
-          Aucune donnée de séjour disponible
-        </div>
-      )}
     </div>
   );
 }
@@ -205,7 +131,7 @@ function MonthGrid({ stays, currentDate }: { stays: (StayRecord & { guestName: s
   const month = currentDate.getMonth();
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstDayOfWeek = new Date(year, month, 1).getDay();
+  const firstDayOfWeek = new Date(year, month, 1).getDay(); // 0=dim
   const startOffset = firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1;
 
   const weeks: { days: (number | null)[]; weekNum: number }[] = [];
@@ -213,102 +139,41 @@ function MonthGrid({ stays, currentDate }: { stays: (StayRecord & { guestName: s
   let weekCounter = 1;
   for (let day = 1; day <= daysInMonth; day++) {
     currentWeek.push(day);
-    if (currentWeek.length === 7) {
-      weeks.push({ days: currentWeek, weekNum: weekCounter++ });
-      currentWeek = [];
-    }
+    if (currentWeek.length === 7) { weeks.push({ days: currentWeek, weekNum: weekCounter++ }); currentWeek = []; }
   }
   if (currentWeek.length > 0) {
     while (currentWeek.length < 7) currentWeek.push(null);
     weeks.push({ days: currentWeek, weekNum: weekCounter });
   }
 
-  // Stays still active this month (any overlap)
-  const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`;
-  const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
-  const activeStays = stays.filter(s => s.checkIn <= monthEnd && s.checkOut >= monthStart);
+  const getDateStr = (day: number) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
-  // For each stay, compute which day columns it spans
-  const stayRows = useMemo(() => {
-    // Group stays into lanes for each week to avoid overlap
-    const lanes: (typeof activeStays)[] = [];
-    for (const stay of activeStays) {
-      let placed = false;
-      for (const lane of lanes) {
-        const conflict = lane.some(other => {
-          const aStart = new Date(stay.checkIn);
-          const aEnd = new Date(stay.checkOut);
-          const bStart = new Date(other.checkIn);
-          const bEnd = new Date(other.checkOut);
-          return aStart < bEnd && aEnd > bStart;
-        });
-        if (!conflict) {
-          lane.push(stay);
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        lanes.push([stay]);
+  // Grouper les séjours par semaine unique : 1 meilleur séjour par semaine
+  const weekStays = useMemo(() => {
+    const map = new Map<string, (StayRecord & { guestName: string })>();
+    for (const s of stays) {
+      const wk = getWeekStart(s.checkIn);
+      const existing = map.get(wk);
+      const sPrice = s.priceConfirmed || s.priceQuoted || 0;
+      const ePrice = existing ? (existing.priceConfirmed || existing.priceQuoted || 0) : 0;
+      if (!existing || sPrice > ePrice) {
+        map.set(wk, { ...s, checkIn: s.checkIn, checkOut: s.checkOut });
       }
     }
-    return lanes;
-  }, [activeStays]);
-
-  const getColForDay = (day: number) => {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    return dateStr;
-  };
-
-  // Position sejour dans la row: left offset et width
-  const getStayPosition = (stay: typeof activeStays[0], week: (number | null)[]) => {
-    const wkStartDates = week.filter(d => d !== null).map(d => getColForDay(d as number));
-    const wkStart = wkStartDates[0] || stay.checkIn;
-    const wkEnd = wkStartDates[wkStartDates.length - 1] || stay.checkOut;
-
-    const stayStart = stay.checkIn < wkStart ? wkStart : stay.checkIn;
-    const stayEnd = stay.checkOut > wkEnd ? wkEnd : stay.checkOut;
-
-    const dayIn = new Date(stayStart);
-    const dayOut = new Date(stayEnd);
-    const weekFirst = new Date(wkStartDates[0]);
-
-    const colStart = Math.round((dayIn.getTime() - weekFirst.getTime()) / 86400000);
-    const colSpan = Math.max(1, Math.round((dayOut.getTime() - dayIn.getTime()) / 86400000));
-
-    return { colStart: Math.max(0, colStart), colSpan: Math.min(7 - Math.max(0, colStart), colSpan) };
-  };
+    return map;
+  }, [stays]);
 
   return (
     <div>
-      {/* Stats header */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{activeStays.length}</span> séjours sur ce mois
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          <span style={{ fontWeight: 600, color: '#059669' }}>
-            {activeStays.filter(s => s.status === 'confirmed' || s.status === 'paid').length}
-          </span> confirmés
-        </div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#d97706' }}>
-          {activeStays.reduce((sum, s) => sum + (s.priceConfirmed || s.priceQuoted || 0), 0).toLocaleString('fr-FR')}€
-        </div>
-      </div>
-
       <div style={{
         background: 'var(--bg-surface)', borderRadius: 'var(--radius-lg)',
         border: '1px solid var(--border-color)', overflow: 'hidden',
       }}>
-        {/* Header row: week # + day names */}
+        {/* Header */}
         <div style={{ display: 'grid', gridTemplateColumns: '40px repeat(7, 1fr)', borderBottom: '2px solid var(--border-color)', background: 'var(--bg-surface-alt)' }}>
           <div style={{ padding: '8px 4px', textAlign: 'center', fontSize: 9, fontWeight: 600, color: 'var(--text-muted)' }}>Sem</div>
           {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((name, i) => (
-            <div key={i} style={{
-              padding: '8px 4px', textAlign: 'center', fontSize: 10, fontWeight: 600,
-              color: i >= 5 ? 'var(--text-muted)' : 'var(--text-secondary)',
-              textTransform: 'uppercase', letterSpacing: '0.5px',
-            }}>
+            <div key={i} style={{ padding: '8px 4px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: i >= 5 ? 'var(--text-muted)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {name}
             </div>
           ))}
@@ -316,113 +181,98 @@ function MonthGrid({ stays, currentDate }: { stays: (StayRecord & { guestName: s
 
         {/* Weeks */}
         {weeks.map((week, wi) => {
+          const firstDay = week.days.find(d => d !== null);
+          const weekStart = firstDay ? getDateStr(firstDay) : '';
+          const weekS = weekStart ? getWeekStart(weekStart) : '';
+          const stay = weekS ? weekStays.get(weekS) : undefined;
           const today = new Date();
+          const cfg = stay ? (statusConfig[stay.status] || statusConfig.pending) : null;
+
           return (
             <div key={wi} style={{
               display: 'grid', gridTemplateColumns: '40px repeat(7, 1fr)',
               borderBottom: wi < weeks.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+              position: 'relative',
             }}>
-              {/* Week number cell */}
+              {/* Week number */}
               <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 6,
                 fontSize: 9, fontWeight: 700, color: 'var(--text-muted)',
                 background: 'var(--bg-surface-alt)', borderRight: '1px solid var(--border-subtle)',
-                padding: 2,
               }}>
                 S{week.weekNum}
               </div>
 
-              {/* Day cells + stay bars */}
-              <div style={{ gridColumn: '2 / span 7', position: 'relative' }}>
-                {/* Day cells background */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
-                  {week.days.map((day, di) => {
-                    if (day === null) return <div key={`empty-${di}`} style={{ minHeight: 120, background: 'var(--bg-surface-alt)' }} />;
-                    const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-                    const isWeekend = di >= 5;
-                    return (
-                      <div key={day} style={{
-                        minHeight: 120, padding: '24px 3px 3px',
-                        borderRight: di < 6 ? '1px solid var(--border-subtle)' : 'none',
-                        background: isToday ? 'var(--brand-dim)' : 'transparent',
-                        position: 'relative',
-                      }}>
-                        <div style={{
-                          position: 'absolute', top: 3, left: 3,
-                          fontSize: 10, fontWeight: isToday ? 700 : 500,
-                          color: isToday ? 'var(--brand)' : isWeekend ? 'var(--text-muted)' : 'var(--text-secondary)',
-                          width: 20, height: 20, borderRadius: 4,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          background: isToday ? 'var(--brand)' : 'transparent',
-                          color: isToday ? '#fff' : undefined,
-                        }}>
-                          {day}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Stay bars */}
-                {stayRows.map((lane, li) => (
-                  <div key={li} style={{
-                    position: 'absolute', top: 0, left: 0, right: 0,
-                    display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)',
-                    pointerEvents: 'none',
+              {/* Day cells */}
+              {week.days.map((day, di) => {
+                if (day === null) return <div key={`e-${di}`} style={{ minHeight: 110, background: 'var(--bg-surface-alt)' }} />;
+                const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+                const isWeekend = di >= 5;
+                return (
+                  <div key={day} style={{
+                    minHeight: 110, padding: '24px 3px 3px', position: 'relative',
+                    borderRight: di < 6 ? '1px solid var(--border-subtle)' : 'none',
+                    background: isToday ? 'var(--brand-dim)' : 'transparent',
                   }}>
-                    {week.days.map((day, di) => {
-                      if (day === null) return <div key={`empty-${di}`} />;
-                      const dateStr = getColForDay(day);
-                      // Find stays that include this day
-                      const staysHere = lane.filter(s => dateStr >= s.checkIn && dateStr < s.checkOut);
+                    <div style={{
+                      position: 'absolute', top: 3, left: 3, width: 20, height: 20, borderRadius: 4,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 10, fontWeight: isToday ? 700 : 500,
+                      background: isToday ? 'var(--brand)' : 'transparent',
+                      color: isToday ? '#fff' : (isWeekend ? 'var(--text-muted)' : 'var(--text-secondary)'),
+                    }}>
+                      {day}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Stay bar — 1 seul par semaine */}
+              {stay && cfg && (() => {
+                // Find start/end columns
+                const startIdx = week.days.findIndex(d => d !== null && getDateStr(d) >= stay.checkIn);
+                const endCol = week.days.findIndex(d => d !== null && getDateStr(d) >= stay.checkOut);
+                const colStart = Math.max(0, startIdx);
+                const colEnd = endCol >= 0 ? endCol : week.days.filter(d => d !== null).length;
+                const span = Math.max(1, colEnd - colStart);
+
+                const sPrice = stay.priceConfirmed || stay.priceQuoted || 0;
+
+                return (
+                  <div style={{
+                    position: 'absolute', top: 24, left: 0, right: 0, pointerEvents: 'none',
+                    display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)',
+                  }}>
+                    {week.days.map((_d, ci) => {
+                      if (ci < colStart || ci >= colStart + span) return <div key={`sp-${ci}`} />;
+                      const isFirst = ci === colStart;
                       return (
-                        <div key={day} style={{ position: 'relative', height: 24 * (li + 1) }}>
-                          {staysHere.map(s => {
-                            const isFirst = dateStr === s.checkIn;
-                            const isLast = dateStr >= s.checkOut; // approximate
-
-                            // Only render on the first day of each stay for simplicity per lane
-                            if (dateStr !== s.checkIn) return null;
-
-                            // Compute span
-                            let span = 1;
-                            for (let dd = 1; dd <= 7 - di; dd++) {
-                              const nextDate = getColForDay(day + dd);
-                              if (nextDate < s.checkOut) span = dd + 1;
-                              else break;
-                            }
-                            // Limit to visible grid
-                            span = Math.min(span, 7 - di);
-
-                            const cfg = statusConfig[s.status] || statusConfig.pending;
-
-                            return (
-                              <div key={s.id} style={{
-                                position: 'absolute', top: 24 * li, left: 0,
-                                width: `${(span * 100)}%`, height: 20,
-                                zIndex: 10, pointerEvents: 'auto', cursor: 'pointer',
-                                padding: '0 2px',
-                              }}
-                                title={`${s.guestName} · ${s.checkIn} → ${s.checkOut}${s.priceConfirmed ? ` · ${s.priceConfirmed}€` : ''}`}
-                              >
-                                <div style={{
-                                  display: 'flex', alignItems: 'center', gap: 4,
-                                  padding: '2px 6px', borderRadius: 4, height: '100%',
-                                  background: cfg.bg, borderLeft: `3px solid ${cfg.text}`,
-                                  overflow: 'hidden', fontSize: 9, fontWeight: 600,
-                                  color: 'var(--text-primary)', whiteSpace: 'nowrap',
-                                }}>
-                                  {span >= 2 && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.guestName}</span>}
-                                </div>
-                              </div>
-                            );
-                          })}
+                        <div key={`stay-${ci}`} style={{
+                          gridColumn: `${ci + 1} / span 1`, pointerEvents: 'auto',
+                          padding: isFirst ? '0 2px' : 0,
+                        }}>
+                          <div style={{
+                            height: 22, borderRadius: isFirst ? 4 : 0, overflow: 'hidden',
+                            background: cfg.bg, borderLeft: isFirst ? `3px solid ${cfg.text}` : 'none',
+                            display: 'flex', alignItems: 'center', padding: isFirst ? '0 6px' : 0,
+                            fontSize: 9, fontWeight: 600, color: 'var(--text-primary)',
+                            whiteSpace: 'nowrap', cursor: 'pointer',
+                          }}
+                            title={`${stay.guestName}\n${formatDateShort(stay.checkIn)} → ${formatDateShort(stay.checkOut)}\n${sPrice > 0 ? `${sPrice.toLocaleString('fr-FR')}€` : 'Prix non spécifié'}`}
+                          >
+                            {isFirst && (
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {stay.guestName}
+                                {sPrice > 0 && <span style={{ marginLeft: 3, color: cfg.text }}>· {sPrice.toLocaleString('fr-FR')}€</span>}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
             </div>
           );
         })}
@@ -446,30 +296,48 @@ export default function CalendarView() {
     });
   }, []);
 
-  // Enrichir les stays avec le nom du contact
+  // Enrich stays with guest name, déduplique par semaine (1 seul / semaine)
   const allStays = useMemo(() => {
-    // D'abord via les stays intégrés aux contacts
-    const fromContacts = contacts.flatMap(c =>
-      c.stays.map(s => ({ ...s, guestName: c.name, contactEmail: c.email }))
-    );
-    // Ensuite via l'API stays (qui a contactName)
     const fromApi = rawStays.map(s => ({
       ...s,
       guestName: (s as any).contactName || 'Inconnu',
       contactEmail: (s as any).contactEmail || '',
     }));
 
-    // Fusionner et dédupliquer par id
-    const map = new Map<string, StayRecord & { guestName: string; contactEmail: string }>();
-    for (const s of [...fromApi, ...fromContacts]) {
-      if (!map.has(s.id)) map.set(s.id, s);
+    // 1 seul stay par semaine : prendre le meilleur (confirmed > pending, puis meilleur prix)
+    const weekMap = new Map<string, StayRecord & { guestName: string; contactEmail: string }>();
+    for (const s of fromApi) {
+      const wk = getWeekStart(s.checkIn);
+      const existing = weekMap.get(wk);
+      const sPrice = s.priceConfirmed || s.priceQuoted || 0;
+      const ePrice = existing ? (existing.priceConfirmed || existing.priceQuoted || 0) : 0;
+      const sScore = (s.status === 'confirmed' || s.status === 'paid' ? 1000 : 0) + sPrice;
+      const eScore = existing ? ((existing.status === 'confirmed' || existing.status === 'paid' ? 1000 : 0) + ePrice) : -1;
+      if (!existing || sScore > eScore) {
+        weekMap.set(wk, s);
+      }
     }
-    return Array.from(map.values());
-  }, [contacts, rawStays]);
+    return Array.from(weekMap.values());
+  }, [rawStays]);
 
   const prevMonth = () => setCurrentDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1));
   const nextMonth = () => setCurrentDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1));
   const goToday = () => setCurrentDate(new Date());
+
+  // Build week list for season view
+  const seasonWeeks = useMemo(() => {
+    return allStays
+      .filter(s => (s.status === 'confirmed' || s.status === 'paid') && (s.priceConfirmed || s.priceQuoted || 0) >= 1000)
+      .map(s => ({
+        season: s.season || 'Inconnue',
+        weekStart: getWeekStart(s.checkIn),
+        guestName: s.guestName,
+        price: s.priceConfirmed || s.priceQuoted || 0,
+        status: s.status,
+        checkIn: s.checkIn,
+        checkOut: s.checkOut,
+      }));
+  }, [allStays]);
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ padding: 24, maxWidth: 1200 }}>
@@ -478,41 +346,23 @@ export default function CalendarView() {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>Calendrier des séjours</h1>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-            {allStays.length} séjours · {allStays.filter(s => s.status === 'confirmed' || s.status === 'paid').length} confirmés
+            {seasonWeeks.length} semaines louées · {allStays.filter(s => s.status === 'confirmed' || s.status === 'paid').length} confirmées
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ display: 'flex', gap: 4, marginRight: 12 }}>
-            <button
-              onClick={() => setViewMode('month')}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 8,
-                border: 'none',
-                fontSize: 11,
-                fontWeight: viewMode === 'month' ? 600 : 400,
-                color: viewMode === 'month' ? 'var(--brand)' : 'var(--text-secondary)',
-                background: viewMode === 'month' ? 'var(--brand-dim)' : 'transparent',
-                cursor: 'pointer',
-              }}
-            >
-              Mois
-            </button>
-            <button
-              onClick={() => setViewMode('season')}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 8,
-                border: 'none',
-                fontSize: 11,
-                fontWeight: viewMode === 'season' ? 600 : 400,
-                color: viewMode === 'season' ? 'var(--brand)' : 'var(--text-secondary)',
-                background: viewMode === 'season' ? 'var(--brand-dim)' : 'transparent',
-                cursor: 'pointer',
-              }}
-            >
-              Par saison
-            </button>
+            <button onClick={() => setViewMode('month')} style={{
+              padding: '6px 12px', borderRadius: 8, border: 'none', fontSize: 11,
+              fontWeight: viewMode === 'month' ? 600 : 400,
+              color: viewMode === 'month' ? 'var(--brand)' : 'var(--text-secondary)',
+              background: viewMode === 'month' ? 'var(--brand-dim)' : 'transparent', cursor: 'pointer',
+            }}>Mois</button>
+            <button onClick={() => setViewMode('season')} style={{
+              padding: '6px 12px', borderRadius: 8, border: 'none', fontSize: 11,
+              fontWeight: viewMode === 'season' ? 600 : 400,
+              color: viewMode === 'season' ? 'var(--brand)' : 'var(--text-secondary)',
+              background: viewMode === 'season' ? 'var(--brand-dim)' : 'transparent', cursor: 'pointer',
+            }}>Par saison</button>
           </div>
           {viewMode === 'month' && (
             <>
@@ -541,22 +391,19 @@ export default function CalendarView() {
           </motion.div>
         ) : (
           <motion.div key="season" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <SeasonView stays={allStays} />
+            <SeasonView weeks={seasonWeeks} />
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Legend */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 20, justifyContent: 'center', flexWrap: 'wrap' }}>
-        {Object.entries(statusConfig).map(([key, cfg]) => {
-          const Icon = cfg.icon;
-          return (
-            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <Icon size={12} color={cfg.text} />
-              <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{cfg.label}</span>
-            </div>
-          );
-        })}
+        {Object.entries(statusConfig).map(([key, cfg]) => (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: cfg.bg, borderLeft: `2px solid ${cfg.text}` }} />
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{cfg.label}</span>
+          </div>
+        ))}
       </div>
     </motion.div>
   );
