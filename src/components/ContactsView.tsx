@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Search, Users, Mail, Phone,
@@ -6,7 +6,7 @@ import {
   Clock, Tag, Star, Save, X, ArrowLeft,
 } from 'lucide-react';
 import type { Contact, ContactStatus, ContactOrigin } from '../types';
-import { mockContacts, generateId } from '../data';
+import { fetchContacts, generateId } from '../data';
 
 // ============ CONSTANTS ============
 
@@ -467,7 +467,11 @@ export default function ContactsView() {
   const [statusFilter, setStatusFilter] = useState<'all' | ContactStatus>('all');
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [contacts, setContacts] = useState<Contact[]>(mockContacts);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+
+  useEffect(() => {
+    fetchContacts().then(setContacts);
+  }, []);
 
   const filteredContacts = contacts.filter(c => {
     const matchesSearch = !search ||

@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { ChevronLeft, ChevronRight, Users as UsersIcon } from 'lucide-react';
-import { mockContacts } from '../data';
-import type { StayRecord } from '../types';
+import { fetchContacts } from '../data';
+import type { Contact, StayRecord } from '../types';
 
 function getWeekDates(year: number, week: number): Date[] {
   const firstDay = new Date(year, 0, 1);
@@ -28,20 +28,15 @@ function getWeekNumber(date: Date): number {
 const dayNames = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 const monthNames = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 
-function getWeekStays(weekStart: Date, weekEnd: Date): StayRecord[] {
-  return mockContacts.flatMap(c =>
-    c.stays.filter(s => {
-      const checkIn = new Date(s.checkIn);
-      const checkOut = new Date(s.checkOut);
-      return checkIn <= weekEnd && checkOut >= weekStart;
-    }).map(s => ({ ...s, guestName: c.name }))
-  );
-}
-
 export default function CalendarView() {
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const today = new Date();
   const [currentWeek, setCurrentWeek] = useState(getWeekNumber(today));
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
+
+  useEffect(() => {
+    fetchContacts().then(setContacts);
+  }, []);
 
   const days = useMemo(() => getWeekDates(currentYear, currentWeek), [currentYear, currentWeek]);
 
@@ -55,8 +50,14 @@ export default function CalendarView() {
     weekStart.setHours(0, 0, 0, 0);
     const weekEnd = new Date(days[6]);
     weekEnd.setHours(23, 59, 59, 999);
-    return getWeekStays(weekStart, weekEnd);
-  }, [days]);
+    return contacts.flatMap(c =>
+      c.stays.filter(s => {
+        const checkIn = new Date(s.checkIn);
+        const checkOut = new Date(s.checkOut);
+        return checkIn <= weekEnd && checkOut >= weekStart;
+      }).map(s => ({ ...s, guestName: c.name }))
+    );
+  }, [contacts, days]);
 
   function prevWeek() {
     if (currentWeek <= 1) {

@@ -1,16 +1,14 @@
 {
-  "name": "alpicois-backend-sync",
-  "private": true,
+  "name": "alpicois-api",
+  "version": "1.0.0",
   "type": "module",
+  "private": true,
   "scripts": {
-    "sync": "node sync.js",
-    "sync:full": "node sync.js --full",
-    "parse": "node parse-emails.js"
+    "start": "node api-server.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
-    "imapflow": "^1.0.180",
-    "dotenv": "^16.4.7",
-    "openai": "^4.86.0"
+    "better-sqlite3": "^11.8.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0"
   }
 }

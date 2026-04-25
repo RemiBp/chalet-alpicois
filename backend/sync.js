@@ -1,12 +1,11 @@
 /**
  * AGENT DE SYNCHRONISATION EMAIL → SQLite
  *
- * Ce script se connecte à la boîte Hostinger via IMAP,
- * récupère TOUS les emails depuis le début, les parse,
- * et les stocke dans une base SQLite.
+ * Se connecte à Hostinger IMAP, récupère TOUS les emails,
+ * les stocke dans SQLite. Supporte sync complète et incrémentale.
  *
  * Usage:
- *   node sync.js           # Sync incrémentale (nouveaux emails seulement)
+ *   node sync.js           # Sync incrémentale
  *   node sync.js --full    # Sync complète (tous les emails)
  */
 
@@ -34,35 +33,27 @@ const FULL_SYNC = process.argv.includes('--full');
 // ============ SQLITE SETUP ============
 
 const dbDir = DB_PATH.substring(0, DB_PATH.lastIndexOf('/'));
-if (dbDir && !existsSync(dbDir)) {
-  mkdirSync(dbDir, { recursive: true });
-}
+if (dbDir && !existsSync(dbDir)) mkdirSync(dbDir, { recursive: true });
 
 const db = new Database(DB_PATH);
-
-// Enable WAL mode for better performance
 db.pragma('journal_mode = WAL');
 
-// Create tables
 db.exec(`
   CREATE TABLE IF NOT EXISTS emails (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    uid          INTEGER UNIQUE,
-    message_id   TEXT,
-    mailbox      TEXT DEFAULT 'INBOX',
-    sender       TEXT NOT NULL,
-    sender_name  TEXT DEFAULT '',
-    recipients   TEXT DEFAULT '',
-    date         TEXT NOT NULL,
-    subject      TEXT DEFAULT '',
-    body_text    TEXT DEFAULT '',
-    body_html    TEXT DEFAULT '',
-    is_from_guest INTEGER DEFAULT 1,
-    thread_id    TEXT,
-    seen         INTEGER DEFAULT 0,
-    flagged      INTEGER DEFAULT 0,
-    parsed       INTEGER DEFAULT 0,
-    created_at   TEXT DEFAULT (datetime('now'))
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid            INTEGER UNIQUE,
+    message_id     TEXT,
+    mailbox        TEXT DEFAULT 'INBOX',
+    sender         TEXT NOT NULL,
+    sender_name    TEXT DEFAULT '',
+    recipients     TEXT DEFAULT '',
+    date           TEXT NOT NULL,
+    subject        TEXT DEFAULT '',
+    body_text      TEXT DEFAULT '',
+    seen           INTEGER DEFAULT 0,
+    flagged        INTEGER DEFAULT 0,
+    parsed         INTEGER DEFAULT 0,
+    created_at     TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS contacts (
@@ -116,128 +107,273 @@ db.exec(`
     FOREIGN KEY (contact_id) REFERENCES contacts(id)
   );
 
+  CREATE TABLE IF NOT EXISTS auto_replies (
+    id               TEXT PRIMARY KEY,
+    email_id         INTEGER,
+    contact_id       TEXT,
+    reply_type       TEXT DEFAULT 'info',
+    reply_subject    TEXT DEFAULT '',
+    reply_body       TEXT DEFAULT '',
+    alternative_weeks TEXT DEFAULT '[]',
+    status           TEXT DEFAULT 'draft',
+    created_at       TEXT DEFAULT (datetime('now')),
+    sent_at          TEXT,
+    FOREIGN KEY (email_id) REFERENCES emails(id),
+    FOREIGN KEY (contact_id) REFERENCES contacts(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS auto_reply_rules (
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    is_active        INTEGER DEFAULT 1,
+    match_keywords   TEXT DEFAULT '',
+    min_price        REAL DEFAULT 0,
+    max_price        REAL DEFAULT 99999,
+    min_nights       INTEGER DEFAULT 1,
+    max_nights       INTEGER DEFAULT 14,
+    reply_template   TEXT DEFAULT '',
+    created_at       TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value TEXT
   );
 `);
 
-// ============ IMAP SYNC ============
+// ============ HELPERS ============
 
-async function syncMailbox(client, mailboxPath = 'INBOX') {
-  console.log(`\n📂 Ouverture de ${mailboxPath}...`);
-  const mailbox = await client.mailboxOpen(mailboxPath);
-  console.log(`   ${mailbox.exists} messages trouvés`);
+/**
+ * Extrait le body text/plain d'un email source brut (RFC822).
+ * Gère quoted-printable, base64, multipart, etc.
+ */
+function extractBodyText(sourceBuffer) {
+  if (!sourceBuffer) return '';
+  try {
+    const raw = sourceBuffer.toString('utf-8');
+    // Diviser en lignes
+    const lines = raw.split(/\r?\n/);
 
-  // Récupérer le dernier UID synchronisé
+    let boundary = null;
+    let inHeaders = true;
+    let currentSection = 'headers';
+    let textPlainParts = [];
+    let textBuffer = [];
+    let inTextPart = false;
+    let transferEncoding = null;
+
+    // Détecter le boundary
+    const boundaryMatch = raw.match(/boundary="?([^"\s;]+)"?/i);
+    if (boundaryMatch) boundary = boundaryMatch[1];
+
+    // Détecter content-type et transfer-encoding
+    const ctMatch = raw.match(/Content-Type:\s*text\/plain/i);
+    const qpMatch = raw.match(/Content-Transfer-Encoding:\s*quoted-printable/i);
+    const b64Match = raw.match(/Content-Transfer-Encoding:\s*base64/i);
+
+    // Si pas de multipart et text/plain simple
+    if (!boundary && ctMatch) {
+      // Extraction simple: tout après les headers
+      const parts = raw.split(/\r?\n\r?\n/);
+      if (parts.length > 1) {
+        let body = parts.slice(1).join('\n\n');
+        if (qpMatch) {
+          body = decodeQuotedPrintable(body);
+        }
+        return cleanBody(body);
+      }
+    }
+
+    // Parsing multipart basique
+    if (boundary) {
+      const sections = raw.split(new RegExp(`--${escapeRegex(boundary)}`));
+      for (const section of sections) {
+        if (section.includes('text/plain')) {
+          // Extraire le contenu après les headers de cette partie
+          const parts = section.split(/\r?\n\r?\n/);
+          if (parts.length > 1) {
+            let content = parts.slice(1).join('\n\n');
+            // Enlever le trailing --
+            content = content.replace(/--\s*$/, '').trim();
+            if (section.includes('quoted-printable')) {
+              content = decodeQuotedPrintable(content);
+            }
+            textPlainParts.push(content);
+          }
+        }
+      }
+    }
+
+    // Si rien trouvé, prendre tout ce qui semble être du texte
+    if (textPlainParts.length === 0) {
+      const bodyMatch = raw.match(/(?:\r?\n\r?\n)([\s\S]*)/);
+      if (bodyMatch) {
+        let body = bodyMatch[1];
+        // Enlever les signatures de forward/reply
+        body = body.replace(/^--\n.*$/gm, '').trim();
+        textPlainParts.push(body);
+      }
+    }
+
+    return cleanBody(textPlainParts.join('\n\n'));
+  } catch (err) {
+    console.error(`   ⚠️ Body extraction error:`, err.message);
+    return '';
+  }
+}
+
+function decodeQuotedPrintable(str) {
+  return str
+    .replace(/=\r?\n/g, '')       // Soft line breaks
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''); // Remove control chars
+}
+
+function cleanBody(str) {
+  return str
+    .replace(/<[^>]*>/g, '')           // Remove HTML tags
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ============ SYNC ============
+
+async function syncMailbox(client, mailboxPath) {
+  console.log(`\n📂 ${mailboxPath}...`);
+
+  // Obtenir les infos du mailbox sans lock
+  let totalMessages = 0;
+  try {
+    const status = await client.status(mailboxPath, { messages: true });
+    totalMessages = status.messages;
+    console.log(`   ${totalMessages} messages`);
+  } catch (err) {
+    console.log(`   ⚠️ Impossible d'accéder: ${err.message}`);
+    return;
+  }
+
+  if (totalMessages === 0) return;
+
   const lastUidStr = db.prepare("SELECT value FROM sync_state WHERE key = 'last_uid'").get();
   const lastUid = FULL_SYNC ? 0 : (lastUidStr ? parseInt(lastUidStr.value) : 0);
   const sinceUid = lastUid + 1;
 
-  if (sinceUid > 1 && !FULL_SYNC) {
+  if (!FULL_SYNC && lastUid > 0) {
     console.log(`   Sync incrémentale depuis UID ${sinceUid}`);
   } else {
-    console.log(`   Sync ${FULL_SYNC ? 'COMPLÈTE' : 'initiale'} — tous les emails`);
+    console.log(`   Sync complète (tous les emails)`);
   }
 
-  let count = 0;
-  const insertEmail = db.prepare(`
-    INSERT OR IGNORE INTO emails (uid, message_id, mailbox, sender, sender_name, recipients, date, subject, body_text, body_html, seen, flagged)
-    VALUES (@uid, @messageId, @mailbox, @sender, @senderName, @recipients, @date, @subject, @bodyText, @bodyHtml, @seen, @flagged)
-  `);
+  // Lock le mailbox + fetch
+  let lock;
+  try {
+    lock = await client.getMailboxLock(mailboxPath);
+  } catch (err) {
+    console.log(`   ⚠️ Lock failed: ${err.message}`);
+    return;
+  }
 
+  const insertEmail = db.prepare(`
+    INSERT OR IGNORE INTO emails (uid, message_id, mailbox, sender, sender_name, recipients, date, subject, body_text, seen, flagged)
+    VALUES (@uid, @messageId, @mailbox, @sender, @senderName, @recipients, @date, @subject, @bodyText, @seen, @flagged)
+  `);
   const updateLastUid = db.prepare("INSERT OR REPLACE INTO sync_state (key, value) VALUES ('last_uid', ?)");
 
-  // Fetch all emails since last sync
-  const fetchOptions = {
-    since: new Date(0), // depuis le début des temps
-    uid: true,
-  };
-
-  if (sinceUid > 1) {
-    // metadata: false = on ne cherche que les nouveaux
-  }
+  let count = 0;
+  let errors = 0;
 
   try {
-    // On fetch en batch
-    for await (let msg of client.fetch(`${sinceUid}:*`, {
+    // Étape 1: Fetch les metadata (sans source) en batch
+    const messages = [];
+    for await (const msg of client.fetch(`${sinceUid}:*`, {
       uid: true,
       envelope: true,
-      bodyStructure: true,
-      source: true,
       flags: true,
       internalDate: true,
-    })) {
+    }, { uid: true })) {
+      messages.push(msg);
+    }
+
+    console.log(`   ${messages.length} métadonnées récupérées`);
+
+    // Étape 2: Pour chaque message, fetch le source un par un
+    // (fetchOne ne bloque pas le fetch loop contrairement à fetch)
+    for (let i = 0; i < messages.length; i++) {
+      const meta = messages[i];
       try {
-        const envelope = msg.envelope;
-        if (!envelope) continue;
+        // Release et re-lock entre chaque fetchOne pour éviter les deadlocks
+        lock.release();
 
-        // Extraire le body text
-        let bodyText = '';
-        let bodyHtml = '';
-
-        // Try to get text from the message
+        let sourceBuf = null;
         try {
-          const textParts = await client.download(msg.uid, 'TEXT', { uid: true });
-          if (textParts?.content) {
-            bodyText = textParts.content.toString('utf-8');
-          }
-        } catch (e) {
-          // Fallback: try to get body parts
-          try {
-            const parts = msg.bodyStructure?.childNodes || [];
-            for (const part of parts) {
-              if (part.type === 'text/plain' || part.subtype === 'PLAIN') {
-                const data = await client.download(msg.uid, part.part, { uid: true });
-                if (data?.content) bodyText = data.content.toString('utf-8');
-              }
-              if (part.type === 'text/html' || part.subtype === 'HTML') {
-                const data = await client.download(msg.uid, part.part, { uid: true });
-                if (data?.content) bodyHtml = data.content.toString('utf-8');
-              }
-            }
-          } catch (e2) {
-            // Can't get body, that's ok
-          }
+          const msgSource = await client.fetchOne(meta.uid, { source: true }, { uid: true });
+          if (msgSource) sourceBuf = msgSource.source;
+        } catch (srcErr) {
+          // Ignorer si on ne peut pas récupérer la source
         }
+
+        // Re-lock pour la suite
+        lock = await client.getMailboxLock(mailboxPath);
+
+        const envelope = meta.envelope;
+        if (!envelope) continue;
 
         const sender = envelope.from?.[0];
         const senderName = sender?.name || sender?.address || 'Inconnu';
         const senderAddr = sender?.address || '';
+        const bodyText = extractBodyText(sourceBuf);
 
-        const isFromGuest = !senderAddr?.includes('alpicois-laplagne.fr');
+        // Les flags sont un Set dans imapflow
+        const isSeen = meta.flags?.has?.('\\Seen') ? 1 : 0;
+        const isFlagged = meta.flags?.has?.('\\Flagged') ? 1 : 0;
 
         insertEmail.run({
-          uid: msg.uid,
+          uid: meta.uid,
           messageId: envelope.messageId || '',
           mailbox: mailboxPath,
           sender: senderAddr,
           senderName: senderName,
           recipients: (envelope.to || []).map(r => r.address).join(', '),
-          date: msg.internalDate?.toISOString() || new Date().toISOString(),
+          date: meta.internalDate?.toISOString() || new Date().toISOString(),
           subject: envelope.subject || '(Pas de sujet)',
-          bodyText: bodyText.substring(0, 50000),  // limite 50KB
-          bodyHtml: bodyHtml.substring(0, 100000),
-          seen: msg.flags?.includes('\\Seen') ? 1 : 0,
-          flagged: msg.flags?.includes('\\Flagged') ? 1 : 0,
+          bodyText: bodyText.substring(0, 50000),
+          seen: isSeen,
+          flagged: isFlagged,
         });
 
         count++;
-        if (count % 10 === 0) {
-          process.stdout.write(`   ${count} emails synchronisés...\r`);
+        updateLastUid.run(meta.uid.toString());
+
+        if (count % 10 === 0 || count === messages.length) {
+          process.stdout.write(`   ${count}/${messages.length} emails...\r`);
         }
-
-        // Mettre à jour le dernier UID
-        updateLastUid.run(msg.uid.toString());
-
       } catch (err) {
-        console.error(`   ❌ Erreur sur UID ${msg.uid}:`, err.message);
+        errors++;
+        // Re-lock si perdu
+        if (!lock || lock.released) {
+          try { lock = await client.getMailboxLock(mailboxPath); } catch {}
+        }
+        if (errors <= 5) {
+          console.error(`\n   ❌ UID ${meta.uid}: ${err.message}`);
+        }
       }
     }
 
-    console.log(`\n   ✅ ${count} nouveaux emails synchronisés`);
+    console.log(`\n   ✅ ${count} emails synchronisés` + (errors > 0 ? ` (${errors} erreurs)` : ''));
   } catch (err) {
-    console.error(`   ❌ Erreur de fetch:`, err.message);
+    console.error(`   ❌ Erreur: ${err.message}`);
+  } finally {
+    if (lock && !lock.released) lock.release();
   }
 }
 
@@ -261,45 +397,34 @@ async function main() {
     await client.connect();
     console.log('✅ Connecté\n');
 
-    // Lister tous les dossiers/mailboxes
+    // Lister les dossiers
     const mailboxes = await client.list();
-    const boxNames = mailboxes.map(m => m.path).filter(p => !p.includes('[Gmail]'));
-
-    console.log('📁 Dossiers disponibles:');
-    for (const name of boxNames) {
-      const stats = await client.mailboxOpen(name);
-      console.log(`   - ${name} (${stats.exists} messages)`);
-      await client.mailboxClose();
-    }
-
-    // Sync INBOX et SENT
-    for (const box of ['INBOX', 'SENT']) {
-      try {
-        await syncMailbox(client, box);
-      } catch (err) {
-        console.log(`   ⚠️ Impossible d'ouvrir ${box}, on essaie les équivalents...`);
-        // Hostinger utilise parfois "Sent" au lieu de "SENT"
-        for (const alt of ['Sent', 'Sent Messages', 'Sent Mail', 'INBOX.Sent']) {
-          try {
-            await syncMailbox(client, alt);
-            break;
-          } catch {}
-        }
+    console.log('📁 Dossiers:');
+    for (const mb of mailboxes) {
+      if (!mb.path.includes('[Gmail]') && !mb.path.includes('Drafts') && !mb.path.includes('Trash') && !mb.path.includes('Junk')) {
+        try {
+          const st = await client.status(mb.path, { messages: true });
+          if (st.messages > 0) console.log(`   ${mb.path}: ${st.messages} messages`);
+        } catch {}
       }
     }
 
+    // Sync INBOX et INBOX.Sent
+    for (const box of ['INBOX', 'INBOX.Sent']) {
+      await syncMailbox(client, box);
+    }
+
   } catch (err) {
-    console.error('\n❌ Erreur:', err.message);
+    console.error('\n❌ Erreur fatale:', err);
     process.exit(1);
   } finally {
-    await client.logout();
+    try { await client.logout(); } catch {}
     db.close();
   }
 
   console.log('\n═══════════════════════════════════════');
   console.log('  ✅ SYNC TERMINÉE');
-  console.log('  Prochaine étape : lancer le parsing IA');
-  console.log('  → node parse-emails.js');
+  console.log('  Prochaine étape : node parse-emails.js');
   console.log('═══════════════════════════════════════\n');
 }
 

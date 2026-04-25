@@ -1,5 +1,24 @@
 import type { Contact, Email, DashboardStats, SeasonSummary, StayRecord } from './types';
 
+// ─── API CONFIG ───────────────────────────────────
+
+const API_BASE = 'http://localhost:3001/api';
+
+async function fetchJson<T>(url: string, fallback: T): Promise<T> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn(`[data] API unavailable at ${url}, using mock fallback:`, err);
+    return fallback;
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  MOCK DATA (used as fallback when API is offline)
+// ═══════════════════════════════════════════════════
+
 // ============ EMAILS ============
 
 export const mockEmails: Email[] = [
@@ -294,7 +313,36 @@ export const mockContacts: Contact[] = [
   },
 ];
 
-// ============ STATS ============
+// ═══════════════════════════════════════════════════
+//  ASYNC API FUNCTIONS (with mock fallback)
+// ═══════════════════════════════════════════════════
+
+export async function fetchEmails(): Promise<Email[]> {
+  return fetchJson<Email[]>(`${API_BASE}/emails`, mockEmails);
+}
+
+export async function fetchContacts(): Promise<Contact[]> {
+  return fetchJson<Contact[]>(`${API_BASE}/contacts`, mockContacts);
+}
+
+export async function fetchContactById(id: string): Promise<Contact | null> {
+  const fallback = mockContacts.find(c => c.id === id) || null;
+  return fetchJson<Contact | null>(`${API_BASE}/contacts/${id}`, fallback);
+}
+
+export async function fetchDashboardStats(): Promise<DashboardStats> {
+  return fetchJson<DashboardStats>(`${API_BASE}/stats`, getDashboardStats());
+}
+
+export async function fetchStays(): Promise<StayRecord[]> {
+  return fetchJson<StayRecord[]>(`${API_BASE}/stays`, getAllStaysMock());
+}
+
+// ============ SYNC HELPERS (used inside fetchDashboardStats fallback) ============
+
+function getAllStaysMock(): StayRecord[] {
+  return mockContacts.flatMap(c => c.stays);
+}
 
 export function getDashboardStats(): DashboardStats {
   const clients = mockContacts.filter(c => c.status === 'client');
@@ -305,7 +353,6 @@ export function getDashboardStats(): DashboardStats {
   const totalRevenue = paidConfirmed.reduce((sum, s) => sum + s.priceConfirmed, 0);
   const upcoming = allStays.filter(s => new Date(s.checkIn) > new Date() && s.status !== 'cancelled');
 
-  // Season summaries
   const seasonsMap = new Map<string, SeasonSummary>();
   for (const stay of allStays) {
     if (!seasonsMap.has(stay.season)) {
@@ -336,7 +383,8 @@ export function getDashboardStats(): DashboardStats {
     averagePrice: paidConfirmed.length > 0 ? Math.round(totalRevenue / paidConfirmed.length) : 0,
     occupancyRate: 72,
     upcomingStays: upcoming.length,
-    newInquiries: mockContacts.filter(c => c.status === 'prospect').length,
+    newInquiries: prospects.length,
+    pendingReplies: 0,
     seasons: Array.from(seasonsMap.values()),
   };
 }

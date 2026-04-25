@@ -1,19 +1,25 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Search, Users, CalendarDays, ChevronRight, AlertCircle } from 'lucide-react';
-import { mockContacts } from '../data';
+import { fetchContacts } from '../data';
+import type { Contact } from '../types';
 
 type ProspectFilter = 'all' | 'asked' | 'negotiating' | 'abandoned';
 
 export default function ProspectsView() {
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ProspectFilter>('all');
 
+  useEffect(() => {
+    fetchContacts().then(setContacts);
+  }, []);
+
   const prospects = useMemo(() => {
-    return mockContacts.filter(c =>
+    return contacts.filter(c =>
       c.status === 'prospect' || (c.status === 'client' && c.requestedWeeks.length > 0)
     );
-  }, []);
+  }, [contacts]);
 
   const filtered = useMemo(() => {
     let result = prospects;

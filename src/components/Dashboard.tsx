@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { TrendingUp, Users, CalendarDays, Euro, Building2, Bell, ArrowUpRight, ArrowDownRight } from 'lucide-react';
-import { getDashboardStats } from '../data';
+import { fetchDashboardStats } from '../data';
+import type { DashboardStats } from '../types';
 
 const container = {
   hidden: { opacity: 0 },
@@ -87,7 +88,19 @@ function StatCard({ icon: Icon, label, value, prefix, suffix, trend, trendUp, co
 }
 
 export default function Dashboard() {
-  const stats = useMemo(() => getDashboardStats(), []);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+
+  useEffect(() => {
+    fetchDashboardStats().then(setStats);
+  }, []);
+
+  if (!stats) {
+    return (
+      <div style={{ padding: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Chargement...</div>
+      </div>
+    );
+  }
 
   return (
     <motion.div

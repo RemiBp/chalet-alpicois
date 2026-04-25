@@ -1,6 +1,8 @@
 export type ContactOrigin = 'email' | 'whatsapp' | 'phone' | 'website' | 'recommendation' | 'social' | 'other';
 export type ContactStatus = 'prospect' | 'client' | 'former_client';
 export type StayStatus = 'pending' | 'confirmed' | 'paid' | 'cancelled' | 'no_show';
+export type AutoReplyStatus = 'draft' | 'approved' | 'sent' | 'cancelled';
+export type ReplyType = 'available' | 'alternative' | 'unavailable' | 'info' | 'no_reply';
 
 export interface Email {
   id: string;
@@ -19,7 +21,7 @@ export interface Email {
 export interface StayRecord {
   id: string;
   contactId: string;
-  season: string;            // "2024-2025", "2025-2026", etc.
+  season: string;
   checkIn: string;
   checkOut: string;
   nights: number;
@@ -34,54 +36,75 @@ export interface StayRecord {
 
 export interface Contact {
   id: string;
-  // Identité
   name: string;
   email: string;
   phone: string;
   alternatePhones: string[];
-
-  // Origine du contact
   origin: ContactOrigin;
-  originDetail: string;       // "Via WhatsApp", "Site web dealyse.com", "Recommandation des Martin"
-
-  // Statut
+  originDetail: string;
   status: ContactStatus;
-  firstContactDate: string;   // Date ISO
+  firstContactDate: string;
   lastContactDate: string;
-
-  // Historique des séjours (plusieurs années)
   stays: StayRecord[];
   totalStays: number;
-
-  // Pour les prospects : quelles semaines demandées
   requestedWeeks: RequestedWeek[];
-
-  // Notes libres
   notes: string;
-
-  // Date de création/modification locale
   createdAt: string;
   updatedAt: string;
 }
 
 export interface RequestedWeek {
   id: string;
-  season: string;          // "2025-2026"
-  weekNumber: number;      // Semaine calendaire ISO
-  checkIn: string;         // Date d'arrivée demandée
-  checkOut: string;        // Date de départ demandée
+  season: string;
+  weekNumber: number;
+  checkIn: string;
+  checkOut: string;
   adults: number;
   children: number;
   status: 'asked' | 'negotiating' | 'abandoned' | 'booked';
   notes: string;
 }
 
+export interface AutoReply {
+  id: string;
+  emailId: string;
+  contactId: string;
+  contactName: string;
+  contactEmail: string;
+  replyType: ReplyType;
+  replySubject: string;
+  replyBody: string;
+  alternativeWeeks: AlternativeWeek[];
+  status: AutoReplyStatus;
+  createdAt: string;
+  sentAt: string | null;
+  originalEmail: Email | null;
+}
+
+export interface AlternativeWeek {
+  checkIn: string;
+  checkOut: string;
+  price: number;
+}
+
+export interface AutoReplyRule {
+  id: string;
+  name: string;
+  isActive: boolean;
+  matchKeywords: string;
+  minPrice: number;
+  maxPrice: number;
+  minNights: number;
+  maxNights: number;
+  replyTemplate: string;
+}
+
 export interface SeasonSummary {
-  season: string;           // "2024-2025"
-  label: string;           // "Hiver 2024-2025"
+  season: string;
+  label: string;
   totalStays: number;
   totalRevenue: number;
-  occupancyWeeks: number;  // Nombre de semaines réservées
+  occupancyWeeks: number;
   contactsCount: number;
   newContacts: number;
 }
@@ -98,7 +121,8 @@ export interface DashboardStats {
   occupancyRate: number;
   upcomingStays: number;
   newInquiries: number;
+  pendingReplies: number;
   seasons: SeasonSummary[];
 }
 
-export type ViewType = 'dashboard' | 'calendar' | 'contacts' | 'contact-detail' | 'prospects' | 'emails' | 'settings';
+export type ViewType = 'dashboard' | 'calendar' | 'contacts' | 'contact-detail' | 'prospects' | 'emails' | 'auto-reply' | 'settings';

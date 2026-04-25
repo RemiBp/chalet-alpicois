@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Search, RefreshCw, User, Inbox, Send, ChevronRight } from 'lucide-react';
 import type { Email } from '../types';
-import { mockEmails } from '../data';
+import { fetchEmails } from '../data';
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -15,8 +15,8 @@ function formatDate(dateStr: string) {
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 }
 
-function EmailDetail({ email, onBack }: { email: Email; onBack: () => void }) {
-  const thread = mockEmails.filter(e => e.threadId === email.threadId);
+function EmailDetail({ email, emails, onBack }: { email: Email; emails: Email[]; onBack: () => void }) {
+  const thread = emails.filter(e => e.threadId === email.threadId);
 
   return (
     <motion.div
@@ -105,12 +105,17 @@ function EmailDetail({ email, onBack }: { email: Email; onBack: () => void }) {
 }
 
 export default function EmailsView() {
+  const [emails, setEmails] = useState<Email[]>([]);
   const [search, setSearch] = useState('');
   const [folder, setFolder] = useState<'all' | 'inbox' | 'sent'>('all');
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
 
+  useEffect(() => {
+    fetchEmails().then(setEmails);
+  }, []);
+
   const filteredEmails = useMemo(() => {
-    let filtered = mockEmails;
+    let filtered = emails;
     if (folder === 'inbox') filtered = filtered.filter(e => e.folder === 'INBOX');
     if (folder === 'sent') filtered = filtered.filter(e => e.folder === 'SENT');
     if (search) {
@@ -122,12 +127,12 @@ export default function EmailsView() {
       );
     }
     return filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [search, folder]);
+  }, [emails, search, folder]);
 
   if (selectedEmailId) {
-    const email = mockEmails.find(e => e.id === selectedEmailId);
+    const email = emails.find(e => e.id === selectedEmailId);
     if (!email) return null;
-    return <EmailDetail email={email} onBack={() => setSelectedEmailId(null)} />;
+    return <EmailDetail email={email} emails={emails} onBack={() => setSelectedEmailId(null)} />;
   }
 
   return (
@@ -141,10 +146,11 @@ export default function EmailsView() {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>Emails</h1>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-            contact@alpicois-laplagne.fr
+            {emails.length} messages · contact@alpicois-laplagne.fr
           </p>
         </div>
         <button
+          onClick={() => fetchEmails().then(setEmails)}
           style={{
             display: 'flex',
             alignItems: 'center',
