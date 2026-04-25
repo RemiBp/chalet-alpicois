@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import {
   Search, Users, Mail, Phone,
   CalendarDays, MessageSquare, UserPlus,
-  Clock, Tag, Star, Save, X, ArrowLeft,
+  Clock, Tag, Globe, Star, Save, X, ArrowLeft,
 } from 'lucide-react';
 import type { Contact, ContactStatus, ContactOrigin } from '../types';
 import { fetchContacts, generateId } from '../data';
@@ -53,6 +53,7 @@ function ContactForm({
     origin: (contact?.origin || 'email') as ContactOrigin,
     originDetail: contact?.originDetail || '',
     status: (contact?.status || 'prospect') as ContactStatus,
+    nationality: contact?.nationality || '',
     notes: contact?.notes || '',
   });
 
@@ -80,6 +81,7 @@ function ContactForm({
         <FormField label="Email" value={form.email} onChange={v => setForm(f => ({ ...f, email: v }))} type="email" />
         <FormField label="Téléphone" value={form.phone} onChange={v => setForm(f => ({ ...f, phone: v }))} />
         <FormField label="Autres téléphones (séparés par ,)" value={form.alternatePhones} onChange={v => setForm(f => ({ ...f, alternatePhones: v }))} />
+        <FormField label="Nationalité" value={form.nationality} onChange={v => setForm(f => ({ ...f, nationality: v }))} />
       </div>
 
       {/* Origin */}
@@ -304,6 +306,9 @@ function ContactDetail({ contact, onBack }: { contact: Contact; onBack: () => vo
             {localContact.alternatePhones.length > 0 && (
               <InfoRow icon={Phone} label="Autres" value={localContact.alternatePhones.join(', ')} />
             )}
+            {localContact.nationality && (
+              <InfoRow icon={Globe} label="Nationalité" value={localContact.nationality} />
+            )}
           </Card>
 
           {/* Origine */}
@@ -492,6 +497,7 @@ export default function ContactsView() {
       origin: data.origin || 'email',
       originDetail: data.originDetail || '',
       status: data.status || 'prospect',
+      nationality: data.nationality || '',
       firstContactDate: data.firstContactDate || new Date().toISOString(),
       lastContactDate: data.lastContactDate || new Date().toISOString(),
       stays: data.stays || [],
@@ -616,6 +622,9 @@ export default function ContactsView() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{contact.name}</span>
+                  {contact.nationality && (
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 500 }}>({contact.nationality})</span>
+                  )}
                   <span style={{ fontSize: 10, fontWeight: 600, color: cfg.color, background: cfg.bg, padding: '1px 6px', borderRadius: 4 }}>
                     {cfg.label}
                   </span>

@@ -43,6 +43,7 @@ export interface Contact {
   origin: ContactOrigin;
   originDetail: string;
   status: ContactStatus;
+  nationality: string;
   firstContactDate: string;
   lastContactDate: string;
   stays: StayRecord[];

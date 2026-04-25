@@ -1,14 +1,12 @@
 /**
- * AGENT IA DE PARSING EMAIL (DeepSeek)
+ * AGENT IA DE PARSING EMAIL (DeepSeek V4 Pro)
  *
- * Analyse chaque email pour en extraire les infos structurées :
- *   - Contact (nom, email, téléphone)
- *   - Dates de séjour, nombre de personnes
- *   - Prix demandé/confirmé
- *   - Statut (client/prospect)
- *   - Saison
- *
- * Utilise DeepSeek API via le SDK OpenAI (compatible).
+ * Stratégie :
+ *   - Analyse TOUS les emails sans exception (INBOX + Sent)
+ *   - DeepSeek détermine lui-même si l'email contient des infos utiles
+ *   - Croise les infos des emails entrants et sortants pour un même contact
+ *   - Ne crée JAMAIS de séjour pour l'hôte (contact@alpicois-laplagne.fr)
+ *   - Dédoublonnage : un même (contact + dates) ne crée qu'un seul séjour
  */
 
 import 'dotenv/config';
@@ -18,16 +16,16 @@ const DB_PATH = process.env.DB_PATH || '../emails.db';
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
-// ============ DEEPSEEK CLIENT ============
+// ============ CONFIG DEEPSEEK ============
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+const MODEL = 'deepseek-v4-flash';
 
 function createDeepSeekClient() {
   if (!DEEPSEEK_API_KEY || DEEPSEEK_API_KEY === 'sk-votre-cle-openai') {
     return null;
   }
-  // On utilise l'API OpenAI directement via fetch pour éviter la dépendance
   return {
     async chat(messages, options = {}) {
       const response = await fetch(`${DEEPSEEK_BASE_URL}/v1/chat/completions`, {
@@ -37,18 +35,17 @@ function createDeepSeekClient() {
           'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
         },
         body: JSON.stringify({
-          model: options.model || 'deepseek-v4-flash',
+          model: options.model || MODEL,
           messages,
-          temperature: options.temperature ?? 0.1,
-          max_tokens: options.maxTokens ?? 500,
+          temperature: options.temperature ?? 0.05,
+          max_tokens: options.maxTokens ?? 600,
+          thinking: { type: 'disabled' },
         }),
       });
-
       if (!response.ok) {
         const err = await response.text();
         throw new Error(`DeepSeek API ${response.status}: ${err}`);
       }
-
       const data = await response.json();
       return data.choices?.[0]?.message?.content || '';
     },
@@ -57,285 +54,412 @@ function createDeepSeekClient() {
 
 const deepseek = createDeepSeekClient();
 
-// ============ PROMPT DE PARSING ============
+// ============ HOST EMAIL ============
 
-const SYSTEM_PROMPT = `Tu es un assistant spécialisé dans la gestion de locations saisonnières pour "Chalet Alpicois" à La Plagne.
+const HOST_EMAILS = ['contact@alpicois-laplagne.fr'];
 
-Analyse l'email ci-dessous et retourne UNIQUEMENT un objet JSON valide (sans markdown, sans texte autour) :
-
-{
-  "contact": {
-    "name": "Nom complet du contact",
-    "email": "email@example.com",
-    "phone": "numéro si trouvé sinon vide"
-  },
-  "email_type": "new_inquiry" | "follow_up" | "confirmation" | "cancellation" | "info_request" | "other",
-  "dates": { "check_in": "YYYY-MM-DD ou null", "check_out": "YYYY-MM-DD ou null" },
-  "guests": { "adults": nombre, "children": nombre },
-  "pricing": { "amount": nombre, "currency": "EUR" },
-  "status": "client" | "prospect" | "former_client" | "unknown",
-  "is_confirmation": true/false,
-  "season": "2024-2025" ou "2025-2026" ou "2023-2024",
-  "needs_reply": true/false,
-  "urgency": "low" | "normal" | "high",
-  "summary": "Résumé en français en 1-2 phrases"
+function isHostEmail(email) {
+  return HOST_EMAILS.some(h => (email || '').toLowerCase() === h.toLowerCase());
 }
 
-Règles : is_confirmation = true si l'email confirme une réservation. needs_reply = true si une réponse est attendue. urgency : high = demande urgente (délai court, arrivée imminente). Saison : Oct-Avr = hiver, Mai-Sep = été.`;
+// ============ PROMPT ============
 
-// ============ PARSING AVEC DEEPSEEK ============
+const SYSTEM_PROMPT = `Tu es un assistant expert en analyse d'emails pour "Chalet Alpicois" à La Plagne (location saisonnière).
 
-async function parseEmail(email) {
-  // Fallback regex si DeepSeek n'est pas configuré
-  if (!deepseek) {
-    return parseWithRegex(email);
-  }
+Tu reçois un email. Tu dois extraire UNIQUEMENT les informations LITTÉRALES présentes dans l'email.
 
-  const userContent = `Sujet: ${email.subject}\nDe: ${email.sender_name} <${email.sender}>\nDate: ${email.date}\n\nCorps du message:\n${(email.body_text || '').substring(0, 4000)}`;
+RÈGLES STRICTES — ATTENTION, CES RÈGLES SONT CRITIQUES :
+1. PRIX : Extrais le montant EXACT mentionné (ex: "2990€" → 2990, "2700 euros" → 2700). Si aucun prix n'est mentionné explicitement, mets 0. N'INVENTE JAMAIS UN PRIX.
+2. DATES : Extrais les dates EXACTES. "du 11 au 18 février 2024" → check_in="2024-02-11", check_out="2024-02-18". Utilise le contexte de la conversation (sujet "Re: Réservation pour semaine du 21 décembre" → les dates sont dans le sujet). Si pas de date, mets null.
+3. is_confirmation = true UNIQUEMENT si l'email contient une confirmation CLAIRE et EXplicite qu'une réservation est validée. Exemples : "c'est bon pour la semaine", "je confirme", "réservation confirmée", "OK je prends", "merci je confirme", "arrangement conclu", "le chalet est réservé", "d'accord pour ces dates". Les simples demandes d'info ou propositions de prix ne sont PAS des confirmations.
+4. CONTACT PRINCIPAL :
+   - INBOX (email REÇU) : Le contact est l'EXPÉDITEUR
+   - INBOX.Sent (email ENVOYÉ par l'hôte) : Le contact est le DESTINATAIRE. Cherche son email/piétine dans le corps ou le sujet. Si tu ne trouves PAS de nom de destinataire clair, mets contact.email = null (ne prends PAS l'hôte comme contact).
+5. is_from_host = true UNIQUEMENT si l'expéditeur est le gérant (contact@alpicois-laplagne.fr).
+6. Si l'email à l'air d'être une newsletter, notification automatique, ou email purement informatif sans rapport avec une réservation → has_info = false.
+7. Pour les emails SENT (réponses du gérant) : même si l'email traite de disponibilités générales, si tu identifies un destinataire précis qui est un client potentiel, has_info = true et extrait ses infos.
+
+Retourne UNIQUEMENT ce JSON valide (pas de markdown, pas de texte autour) :
+
+{
+  "has_info": true/false,
+  "contact": {
+    "name": "Nom complet du contact ou null",
+    "email": "email du destinataire (pour SENT) ou expéditeur (pour INBOX) ou null",
+    "phone": "numéro de téléphone ou ''"
+  },
+  "email_type": "inquiry" | "confirmation" | "pricing" | "cancellation" | "newsletter" | "notification" | "other",
+  "is_newsletter": true/false,
+  "dates": {
+    "check_in": "YYYY-MM-DD ou null",
+    "check_out": "YYYY-MM-DD ou null"
+  },
+  "guests": {
+    "adults": nombre ou 0,
+    "children": nombre ou 0
+  },
+  "price": nombre ou 0 (UNIQUEMENT si littéral dans l'email),
+  "is_confirmation": true/false (STRICT : seulement si confirmation explicite),
+  "is_from_host": true/false,
+  "nationality": "Nationalité du contact si identifiable (ex: Française, Néerlandaise, Britannique, Belge, Allemande, etc.) ou ''",
+  "summary": "Résumé factuel en 1 phrase ou null"
+}
+
+RAPPEL CRITIQUE : n'invente RIEN. Si tu n'es pas sûr, mets null ou 0.`;
+
+  // ============ PARSING ============
+
+// ============ PARSING ============
+
+async function parseEmail(email, retryCount = 0) {
+  const direction = email.mailbox === 'INBOX.Sent' ? 'ENVOYÉ' : 'REÇU';
+  const userContent = `Email ${direction}
+Sujet: ${email.subject || ''}
+De: ${email.sender_name || ''} <${email.sender || ''}>
+Date: ${email.date || ''}
+Corps:
+${(email.body_text || '').substring(0, 3000)}`;
 
   try {
     const content = await deepseek.chat([
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userContent },
-    ], { temperature: 0.1, maxTokens: 600 });
+    ], { temperature: retryCount > 0 ? 0.1 : 0.05, maxTokens: 800 });
 
-    // Nettoyer et parser le JSON
     const clean = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const result = JSON.parse(clean);
 
-    // Enrichir avec les infos de base
     result.contact = result.contact || {};
-    if (!result.contact.name) result.contact.name = email.sender_name;
-    if (!result.contact.email) result.contact.email = email.sender;
+    result.dates = result.dates || {};
+    result.guests = result.guests || {};
 
     return result;
   } catch (err) {
-    console.error(`   ⚠️ DeepSeek parse error for ${email.id}:`, err.message);
-    console.log(`   Falling back to regex parsing...`);
-    return parseWithRegex(email);
+    if (retryCount < 2) {
+      // Retry avec un prompt simplifié
+      console.warn(`   🔄 Retry ${retryCount + 1} email ${email.id}: ${err.message}`);
+      await new Promise(r => setTimeout(r, 1000));
+      // Prompt simplifié pour le retry
+      const simpleContent = `Sujet: ${email.subject || ''}\nDe: ${email.sender_name || ''}\nDate: ${email.date || ''}\n\nCorps:\n${(email.body_text || '').substring(0, 1500)}`;
+      const retryContent = await deepseek.chat([
+        { role: 'system', content: 'Tu extrais UNIQUEMENT un JSON valide de cet email. Si pas de contenu utile, réponds {"has_info":false}. Toujours du JSON valide.' },
+        { role: 'user', content: simpleContent },
+      ], { temperature: 0.1, maxTokens: 600 });
+      const clean = retryContent.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const result = JSON.parse(clean);
+      result.contact = result.contact || {};
+      result.dates = result.dates || {};
+      result.guests = result.guests || {};
+      return result;
+    }
+    console.error(`   ⚠️ DeepSeek error email ${email.id}: ${err.message}`);
+    return { has_info: false, contact: {}, dates: {}, guests: {}, is_newsletter: false };
   }
 }
 
-// ============ FALLBACK REGEX ============
-
-function parseWithRegex(email) {
-  const body = (email.body_text || '') + ' ' + (email.subject || '');
-  const result = {
-    contact: { name: email.sender_name, email: email.sender, phone: '' },
-    email_type: 'other',
-    dates: { check_in: null, check_out: null },
-    guests: { adults: 1, children: 0 },
-    pricing: { amount: 0, currency: 'EUR' },
-    status: 'unknown',
-    is_confirmation: false,
-    season: null,
-    needs_reply: false,
-    urgency: 'normal',
-    summary: `Email de ${email.sender_name} : ${email.subject}`,
-  };
-
-  const dates = body.match(/du (\d{1,2})[\/\s](\d{1,2})[\/\s](\d{4})/);
-  if (dates) result.dates.check_in = `${dates[3]}-${dates[2].padStart(2,'0')}-${dates[1].padStart(2,'0')}`;
-
-  const ppl = body.match(/(\d+)\s*personnes?/i) || body.match(/(\d+)\s*pers/i);
-  if (ppl) result.guests.adults = parseInt(ppl[1]);
-
-  const kids = body.match(/(\d+)\s*enfants?/i);
-  if (kids) result.guests.children = parseInt(kids[1]);
-
-  const price = body.match(/(\d[\s\d]*)\s*[€euros]/i);
-  if (price) result.pricing.amount = parseInt(price[1].replace(/\s/g, ''));
-
-  if (/confirm|réserv|book/i.test(body)) {
-    result.email_type = 'confirmation'; result.is_confirmation = true; result.status = 'client';
-  } else if (/information|disponibilit|tarif|prix/i.test(body) && !result.is_confirmation) {
-    result.email_type = 'info_request'; result.status = 'prospect';
-  }
-
-  result.needs_reply = !email.sender?.includes('alpicois-laplagne.fr') && result.email_type !== 'other';
-
-  return result;
-}
-
-// ============ GÉNÉRATION DE RÉPONSE AUTOMATIQUE ============
-
-const REPLY_PROMPT = `Tu es Gille, le propriétaire du Chalet Alpicois à La Plagne.
-Tu réponds aux emails de façon professionnelle et chaleureuse en français.
-
-Voici un email reçu. Tu as vérifié les disponibilités. Génère une réponse adaptée.
-
-Contexte :
-- Le chalet peut accueillir jusqu'à 6 personnes
-- Tarifs : basse saison 2200€, moyenne saison 2800€, haute saison 3200-4200€
-- Semaine type : arrivée samedi 16h, départ samedi 10h
-
-Règles de réponse :
-1. Si la semaine demandée est disponible : confirmer, donner le prix, proposer un paiement
-2. Si pas disponible : proposer une alternative (autre semaine)
-3. Si pas disponible du tout : décliner poliment et proposer de tenir au courant pour les désistements
-
-Retourne UNIQUEMENT un objet JSON :
-{
-  "should_reply": true/false,
-  "reply_type": "available" | "alternative" | "unavailable" | "info" | "no_reply",
-  "reply_subject": "Objet de la réponse",
-  "reply_body": "Contenu de la réponse en français (naturel et chaleureux)",
-  "alternative_weeks": [ { "check_in": "YYYY-MM-DD", "check_out": "YYYY-MM-DD", "price": nombre } ] ou []
-}`;
-export async function generateAutoReply(email, availability = {}) {
-  if (!deepseek) {
-    return { should_reply: false, reply_type: 'no_reply', reply_subject: '', reply_body: '', alternative_weeks: [] };
-  }
-
-  const userContent = `Email reçu :
-Sujet: ${email.subject}
-De: ${email.sender_name}
-Date: ${email.date}
-Corps:
-${(email.body_text || '').substring(0, 3000)}
-
-Disponibilités actuelles du chalet : ${JSON.stringify(availability)}`;
-
-  try {
-    const content = await deepseek.chat([
-      { role: 'system', content: REPLY_PROMPT },
-      { role: 'user', content: userContent },
-    ], { temperature: 0.3, maxTokens: 800 });
-
-    const clean = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    return JSON.parse(clean);
-  } catch (err) {
-    console.error(`   ⚠️ Reply generation error:`, err.message);
-    return { should_reply: false, reply_type: 'no_reply', reply_subject: '', reply_body: '', alternative_weeks: [] };
-  }
-}
-
-// ============ GÉNÉRATION D'ID ============
+// ============ ID ============
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-// ============ TRAITEMENT DES EMAILS ============
+// ============ BATCH ============
+
+async function parseBatch(emails) {
+  const results = [];
+  for (const email of emails) {
+    try {
+      const r = await parseEmail(email);
+      results.push({ email, parsed: r });
+    } catch (err) {
+      console.error(`   ❌ Fatal email ${email.id}: ${err.message}`);
+      results.push({ email, parsed: null });
+    }
+  }
+  return results;
+}
+
+// ============ TRAITEMENT ============
 
 async function processEmails() {
-  const emails = db.prepare(`
-    SELECT * FROM emails WHERE parsed = 0 AND body_text != '' AND body_text IS NOT NULL ORDER BY date ASC
+  // TOUS les emails non parsés
+  // Priorité : d'abord les SENT (réponses de l'hôte), puis INBOX
+  // Les SENT contiennent les prix et confirmations, ils doivent être parsés en premier
+  const emailsSent = db.prepare(`
+    SELECT * FROM emails 
+    WHERE parsed = 0 
+      AND body_text != '' 
+      AND body_text IS NOT NULL 
+      AND mailbox = 'INBOX.Sent'
+    ORDER BY date ASC
   `).all();
 
-  console.log(`📧 ${emails.length} emails à analyser avec DeepSeek\n`);
+  const emailsInbox = db.prepare(`
+    SELECT * FROM emails 
+    WHERE parsed = 0 
+      AND body_text != '' 
+      AND body_text IS NOT NULL 
+      AND mailbox = 'INBOX'
+    ORDER BY date ASC
+  `).all();
+
+  const emails = [...emailsSent, ...emailsInbox];
+
+  console.log(`📧 ${emails.length} emails à analyser avec DeepSeek V4 Pro\n`);
 
   if (emails.length === 0) {
-    console.log('✅ Tous les emails sont déjà parsés !');
+    console.log('✅ Aucun email à analyser.');
     return;
   }
 
   const markParsed = db.prepare('UPDATE emails SET parsed = 1 WHERE id = ?');
-  let parsed = 0, contacts = 0, stays = 0, replies = 0;
+  const getContactByEmail = db.prepare('SELECT id, name FROM contacts WHERE email = ?');
+  const insertContact = db.prepare(`
+    INSERT INTO contacts (id, name, email, phone, nationality, status, first_contact_date, last_contact_date, total_stays)
+    VALUES (?, ?, ?, ?, ?, 'prospect', ?, ?, 0)
+  `);
+  const updateContact = db.prepare(`
+    UPDATE contacts SET 
+      name = CASE WHEN ? != '' AND ? IS NOT NULL THEN ? ELSE name END,
+      phone = CASE WHEN ? != '' THEN ? ELSE phone END,
+      last_contact_date = CASE WHEN ? > last_contact_date THEN ? ELSE last_contact_date END,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `);
+  const getContactStays = db.prepare('SELECT * FROM stays WHERE contact_id = ? ORDER BY check_in');
+  const insertStay = db.prepare(`
+    INSERT INTO stays (id, contact_id, season, check_in, check_out, nights, adults, children, price_quoted, status, source_email_id, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const updateStayPriceConfirmed = db.prepare(`
+    UPDATE stays SET price_confirmed = ?, status = 'confirmed', notes = ? WHERE id = ?
+  `);
+  const updateStayPrice = db.prepare(`
+    UPDATE stays SET price_quoted = ?, notes = ? WHERE id = ?
+  `);
 
-  for (let i = 0; i < emails.length; i += 15) {
-    const batch = emails.slice(i, i + 15);
+  let parsed = 0;
+  let newContacts = 0;
+  let newStays = 0;
+  let enrichedStays = 0;
+  let skippedNoInfo = 0;
+  let skippedHost = 0;
+  let errors = 0;
 
-    await Promise.all(batch.map(async (email) => {
+  for (let i = 0; i < emails.length; i += 10) {
+    const batch = emails.slice(i, i + 10);
+    const results = await parseBatch(batch);
+
+    for (const { email, parsed: r } of results) {
       try {
-        const result = await parseEmail(email);
-        if (!result?.contact?.email) {
+        if (!r) {
           markParsed.run(email.id);
-          return;
+          errors++;
+          continue;
         }
 
-        // Upsert contact
-        const existing = db.prepare('SELECT id FROM contacts WHERE email = ?').get(result.contact.email);
+        // DeepSeek dit que l'email n'a pas d'info utile
+        if (r.has_info === false) {
+          markParsed.run(email.id);
+          skippedNoInfo++;
+          continue;
+        }
+
+        // Déterminer l'email contact
+        let contactEmail = null;
+        let contactName = null;
+        let contactPhone = '';
+
+        if (isHostEmail(email.sender)) {
+          // Email ENVOYÉ par l'hôte → contact = destinataire (extrait par DeepSeek)
+          contactEmail = r.contact?.email || null;
+          contactName = r.contact?.name || null;
+          contactPhone = r.contact?.phone || '';
+        } else {
+          // Email REÇU → contact = expéditeur
+          contactEmail = email.sender;
+          contactName = email.sender_name || r.contact?.name || null;
+          contactPhone = r.contact?.phone || '';
+        }
+
+        if (!contactEmail || contactEmail === 'null') {
+          markParsed.run(email.id);
+          continue;
+        }
+
+        // Ne JAMAIS créer de contact/séjour pour l'hôte
+        if (isHostEmail(contactEmail)) {
+          markParsed.run(email.id);
+          skippedHost++;
+          continue;
+        }
+
+        // === UPSERT CONTACT ===
+        let existingContact = getContactByEmail.get(contactEmail);
         let contactId;
-        if (existing) {
-          contactId = existing.id;
-          db.prepare(`UPDATE contacts SET name = COALESCE(NULLIF(?, ''), name), phone = CASE WHEN ? != '' THEN ? ELSE phone END, last_contact_date = ?, updated_at = datetime('now') WHERE id = ?`)
-            .run(result.contact.name, result.contact.phone, result.contact.phone, email.date, contactId);
+
+        if (existingContact) {
+          contactId = existingContact.id;
+          updateContact.run(
+            contactName, contactName, contactName,
+            contactPhone, contactPhone,
+            email.date, email.date, contactId
+          );
         } else {
           contactId = generateId();
-          db.prepare(`INSERT INTO contacts (id, name, email, phone, status, first_contact_date, last_contact_date) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-            .run(contactId, result.contact.name || result.contact.email, result.contact.email, result.contact.phone || '',
-                 result.status === 'client' ? 'client' : 'prospect', email.date, email.date);
-          contacts++;
+          insertContact.run(
+            contactId,
+            contactName || contactEmail,
+            contactEmail,
+            contactPhone,
+            r.nationality || '',
+            email.date, email.date
+          );
+          newContacts++;
         }
 
-        // Si dates trouvées → créer un séjour
-        if (result.dates?.check_in) {
-          const nights = result.dates.check_out
-            ? Math.round((new Date(result.dates.check_out) - new Date(result.dates.check_in)) / 86400000)
+        // === TRAITER LE SÉJOUR ===
+        const checkIn = r.dates?.check_in;
+        const checkOut = r.dates?.check_out;
+        const price = r.price || 0;
+        const adults = r.guests?.adults || 0;
+        const children = r.guests?.children || 0;
+        const isConfirmation = r.is_confirmation === true;
+        const isFromHost = r.is_from_host === true;
+
+        if (checkIn && checkIn !== 'null') {
+          const existingStays = getContactStays.all(contactId);
+          const existingStay = existingStays.find(s =>
+            s.check_in === checkIn &&
+            (checkOut === 'null' || !checkOut || s.check_out === checkOut || !s.check_out)
+          );
+
+          const nights = checkOut && checkOut !== 'null'
+            ? Math.round((new Date(checkOut) - new Date(checkIn)) / 86400000)
             : 7;
-          db.prepare(`INSERT INTO stays (id, contact_id, season, check_in, check_out, nights, adults, children, price_quoted, status, source_email_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(generateId(), contactId, result.season || '', result.dates.check_in, result.dates.check_out || '',
-                 nights, result.guests?.adults || 1, result.guests?.children || 0, result.pricing?.amount || 0,
-                 result.is_confirmation ? 'confirmed' : 'pending', email.id, result.summary || '');
-          stays++;
-        }
 
-        // 🚫 Auto-reply disabled during initial batch parsing — will regenerate later
-        // if (result.needs_reply && result.email_type !== 'confirmation' && result.email_type !== 'other') {
-        //   const reply = await generateAutoReply(email);
-        //   if (reply.should_reply) {
-        //     db.prepare(`INSERT INTO auto_replies (id, email_id, contact_id, reply_type, reply_subject, reply_body, alternative_weeks, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'))`)
-        //       .run(generateId(), email.id, contactId, reply.reply_type, reply.reply_subject || '', reply.reply_body || '',
-        //            JSON.stringify(reply.alternative_weeks || []));
-        //     replies++;
-        //   }
-        // }
+          if (existingStay) {
+            // Enrichir le séjour existant
+            if ((isConfirmation || (isFromHost && price > 0)) && existingStay.status !== 'confirmed') {
+              updateStayPriceConfirmed.run(price, r.summary || existingStay.notes, existingStay.id);
+            } else if (price > 0 && existingStay.price_quoted === 0) {
+              updateStayPrice.run(price, r.summary || existingStay.notes, existingStay.id);
+            }
+            enrichedStays++;
+          } else {
+            const season = computeSeason(checkIn);
+            const stayStatus = isConfirmation ? 'confirmed' : 'pending';
+            insertStay.run(
+              generateId(), contactId, season,
+              checkIn, checkOut || '', nights,
+              adults || 1, children || 0,
+              price, stayStatus, email.id, r.summary || ''
+            );
+            newStays++;
+          }
+        }
 
         markParsed.run(email.id);
         parsed++;
-        process.stdout.write(`   📨 ${parsed}/${emails.length} emails...\r`);
-      } catch (err) {
-        console.error(`\n   ❌ Erreur email ${email.id}:`, err.message);
-        markParsed.run(email.id);
-      }
-    }));
 
-    // Petite pause entre les lots pour respecter les limites API
-    await new Promise(r => setTimeout(r, 200));
+        if (parsed % 50 === 0) {
+          process.stdout.write(`   📨 ${parsed}/${emails.length} emails... (${newContacts} contacts, ${newStays} séjours, ${skippedNoInfo} ignorés)\r`);
+        }
+      } catch (err) {
+        console.error(`\n   ❌ Erreur email ${email.id}: ${err.message}`);
+        markParsed.run(email.id);
+        errors++;
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 300));
   }
 
-  console.log(`\n\n✅ Résultats :`);
-  console.log(`   📧 ${parsed} emails analysés`);
-  console.log(`   👤 ${contacts} nouveaux contacts`);
-  console.log(`   🏠 ${stays} séjours créés`);
-  console.log(`   🤖 ${replies} réponses auto générées (en attente de validation)`);
+  // === POST-TRAITEMENT ===
+  console.log(`\n\n📊 Post-traitement...`);
+
+  // Mettre à jour total_stays
+  db.prepare(`
+    UPDATE contacts SET total_stays = (
+      SELECT COUNT(*) FROM stays WHERE stays.contact_id = contacts.id
+    )
+  `).run();
+
+  // Statut "client" : au moins 1 séjour confirmé avec prix > 1000€
+  db.prepare(`
+    UPDATE contacts SET status = 'client' WHERE id IN (
+      SELECT DISTINCT contact_id FROM stays 
+      WHERE status IN ('confirmed', 'paid') 
+        AND (price_confirmed > 1000 OR (price_confirmed = 0 AND price_quoted > 1000))
+    )
+  `).run();
+  db.prepare(`UPDATE contacts SET status = 'prospect' WHERE status != 'client'`).run();
+
+  // RAPPORT
+  const finalContacts = db.prepare("SELECT status, COUNT(*) as c FROM contacts GROUP BY status").all();
+  const finalStays = db.prepare("SELECT status, COUNT(*) as c FROM stays GROUP BY status").all();
+  const totalContacts = db.prepare("SELECT COUNT(*) as c FROM contacts").get().c;
+  const totalStays = db.prepare("SELECT COUNT(*) as c FROM stays").get().c;
+  const totalRevenue = db.prepare("SELECT COALESCE(SUM(price_confirmed),0) as rev FROM stays WHERE status IN ('confirmed','paid')").get().rev;
+  const totalQuoted = db.prepare("SELECT COALESCE(SUM(price_quoted),0) as rev FROM stays").get().rev;
+
+  console.log(`\n═══════════════════════════════════════`);
+  console.log(`✅ PARSING TERMINÉ`);
+  console.log(`═══════════════════════════════════════`);
+  console.log(`📧 ${parsed} emails analysés (${errors} erreurs)`);
+  console.log(`⏭️  ${skippedNoInfo} ignorés (newsletters/notifications)`);
+  console.log(`⏭️  ${skippedHost} emails hôte ignorés`);
+  console.log(``);
+  console.log(`👤 ${totalContacts} contacts`);
+  for (const c of finalContacts) console.log(`   · ${c.status} : ${c.c}`);
+  console.log(`🏠 ${totalStays} séjours`);
+  for (const s of finalStays) console.log(`   · ${s.status} : ${s.c}`);
+  console.log(`💰 Revenus confirmés : ${totalRevenue}€`);
+  console.log(`💰 Total devis : ${totalQuoted}€`);
+  console.log(`📈 ${newContacts} contacts · ${newStays} séjours · ${enrichedStays} enrichis`);
+  console.log(``);
+
+  db.close();
+}
+
+function computeSeason(checkIn) {
+  if (!checkIn) return '';
+  const d = new Date(checkIn);
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  if (month >= 10) return `${year}-${year + 1}`;
+  if (month <= 4) return `${year - 1}-${year}`;
+  return `${year}`;
 }
 
 // ============ MAIN ============
 
 async function main() {
   console.log('═══════════════════════════════════════');
-  console.log('  🧠 AGENT DE PARSING DEEPSEEK');
+  console.log('  🧠 PARSING DEEPSEEK V4 PRO');
+  console.log('  📧 Tous les emails analysés');
   console.log('═══════════════════════════════════════\n');
 
   if (!deepseek) {
-    console.log('⚠️  DeepSeek non configuré. Utilisation du parseur regex (basique).');
-    console.log('   Configurez DEEPSEEK_API_KEY dans .env pour le parsing IA.\n');
-  } else {
-    console.log('✅ DeepSeek connecté');
-    // Test de connexion
-    try {
-      const test = await deepseek.chat([
-        { role: 'user', content: 'Réponds uniquement "OK" si tu me reçois.' },
-      ], { temperature: 0, maxTokens: 10 });
-      console.log(`   Test API: ${test}\n`);
-    } catch (err) {
-      console.log(`   ⚠️ Test DeepSeek échoué: ${err.message}. Utilisation du fallback regex.\n`);
-    }
+    console.log('⚠️  DeepSeek non configuré.');
+    process.exit(1);
+  }
+
+  console.log('✅ DeepSeek connecté');
+  try {
+    const test = await deepseek.chat([
+      { role: 'user', content: 'Réponds uniquement "OK" si tu me reçois.' },
+    ], { temperature: 0, maxTokens: 10 });
+    console.log(`   Test API: ${test}\n`);
+  } catch (err) {
+    console.log(`   ⚠️ Test API échoué: ${err.message}`);
+    process.exit(1);
   }
 
   await processEmails();
-
-  // Stats
-  const stats = {
-    emails: db.prepare('SELECT COUNT(*) as c FROM emails').get().c,
-    contacts: db.prepare('SELECT COUNT(*) as c FROM contacts').get().c,
-    stays: db.prepare('SELECT COUNT(*) as c FROM stays').get().c,
-    replies: db.prepare('SELECT COUNT(*) as c FROM auto_replies').get()?.c || 0,
-  };
-  console.log(`\n📊 Base : ${stats.emails} emails · ${stats.contacts} contacts · ${stats.stays} séjours · ${stats.replies} réponses auto`);
-  db.close();
 }
 
-main().catch(err => { console.error('❌', err); process.exit(1); });
+main().catch(err => {
+  console.error('❌ Fatal:', err);
+  process.exit(1);
+});

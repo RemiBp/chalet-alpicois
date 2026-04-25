@@ -126,7 +126,8 @@ app.get('/api/emails', (req, res) => {
   res.json(rows.map(r => ({
     ...toCamel(r),
     id: String(r.id),
-    isFromGuest: r.mailbox === 'INBOX',
+    folder: r.mailbox,
+    isFromGuest: !r.sender?.includes('alpicois-laplagne.fr'),
     threadId: null,
   })));
 });
@@ -185,6 +186,38 @@ app.get('/api/contacts/:id', (req, res) => {
   contact.totalStays = contact.stays.length;
 
   res.json(contact);
+});
+
+// ─── PUT /api/contacts/:id ─────────────────────────
+
+app.put('/api/contacts/:id', (req, res) => {
+  const { id } = req.params;
+  const existing = db.prepare('SELECT * FROM contacts WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: 'Contact not found' });
+
+  const fields = ['name', 'email', 'phone', 'origin', 'origin_detail', 'status', 'nationality', 'notes'];
+  const updates = [];
+  const vals = [];
+
+  for (const f of fields) {
+    if (req.body[f] !== undefined) {
+      updates.push(`${f} = ?`);
+      vals.push(req.body[f]);
+    }
+  }
+
+  if (req.body.alternatePhones !== undefined) {
+    updates.push('alternate_phones = ?');
+    vals.push(JSON.stringify(req.body.alternatePhones));
+  }
+
+  if (updates.length > 0) {
+    updates.push('updated_at = datetime(\'now\')');
+    vals.push(id);
+    db.prepare(`UPDATE contacts SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  res.json({ success: true });
 });
 
 // ─── GET /api/stays ───────────────────────────────
