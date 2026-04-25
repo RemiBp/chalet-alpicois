@@ -95,11 +95,11 @@ app.get('/api/stats', (req, res) => {
       });
     }
     const seasonSummary = seasonsMap.get(season);
-    seasonSummary.totalStays++;
     if (stay.status === 'confirmed' || stay.status === 'paid') {
+      seasonSummary.totalStays++;
       seasonSummary.totalRevenue += getPrice(stay);
+      seasonSummary.occupancyWeeks += (stay.nights || 0) / 7;
     }
-    seasonSummary.occupancyWeeks += (stay.nights || 0) / 7;
   }
 
   // Demandes à confirmer : stays pending avec check_in >= aujourd'hui, triées par check_in ASC
