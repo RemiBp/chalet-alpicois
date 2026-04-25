@@ -46,38 +46,77 @@ app.get('/api/stats', (req, res) => {
   const now = new Date().toISOString().split('T')[0];
 
   const contacts = db.prepare('SELECT * FROM contacts').all();
-  const allStays = db.prepare(`
-    SELECT s.*, c.name AS contact_name, c.status AS contact_status
-    FROM stays s JOIN contacts c ON c.id = s.contact_id
-  `).all();
 
   const clients = contacts.filter(c => c.status === 'client');
   const prospects = contacts.filter(c => c.status === 'prospect');
   const formerClients = contacts.filter(c => c.status === 'former_client');
 
-  // getPrice: price_confirmed si > 0, sinon price_quoted
-  const getPrice = (s) => (s.price_confirmed > 0 ? s.price_confirmed : s.price_quoted) || 0;
-
-  // Revenus confirmés
-  const confirmedStays = allStays.filter(s => s.status === 'paid' || s.status === 'confirmed');
-  const totalRevenue = confirmedStays.reduce((sum, s) => sum + getPrice(s), 0);
-  const averagePrice = confirmedStays.length > 0 ? Math.round(totalRevenue / confirmedStays.length) : 0;
-
-  // Nombre de semaines uniques louées (déduplique les artefacts DeepSeek)
-  const bookedWeeksCount = db.prepare(`
-    SELECT COUNT(*) as c FROM (
+  // ═══════════════════════════════════════════════════
+  //  REVENUS RÉELS : 1 SEUL SÉJOUR PAR SEMAINE
+  //  On prend le MAX price_confirmed/price_quoted
+  //  par semaine pour éviter les doublons DeepSeek
+  // ═══════════════════════════════════════════════════
+  const revenueByWeek = db.prepare(`
+    WITH week_prices AS (
       SELECT 
         CASE CAST(strftime('%w', s.check_in) AS INTEGER)
           WHEN 0 THEN date(s.check_in, '-' || (6) || ' days')
           ELSE date(s.check_in, '-' || (CAST(strftime('%w', s.check_in) AS INTEGER) - 1) || ' days')
-        END as week_start
+        END as week_start,
+        MAX(COALESCE(s.price_confirmed, s.price_quoted, 0)) as best_price,
+        s.season
       FROM stays s
       WHERE s.status IN ('confirmed','paid')
-      GROUP BY week_start
+      GROUP BY week_start, s.season
+      HAVING best_price >= 1000
     )
-  `).get().c;
+    SELECT COUNT(*) as weeks, ROUND(SUM(best_price),0) as total_revenue
+    FROM week_prices
+  `).get();
+
+  const totalRevenue = revenueByWeek.total_revenue || 0;
+  const bookedWeeksCount = revenueByWeek.weeks || 0;
+  const averagePrice = bookedWeeksCount > 0 ? Math.round(totalRevenue / bookedWeeksCount) : 0;
+
+  // Season summaries — même logique 1 semaine max
+  const seasonSummaries = db.prepare(`
+    WITH week_prices AS (
+      SELECT 
+        CASE CAST(strftime('%w', s.check_in) AS INTEGER)
+          WHEN 0 THEN date(s.check_in, '-' || (6) || ' days')
+          ELSE date(s.check_in, '-' || (CAST(strftime('%w', s.check_in) AS INTEGER) - 1) || ' days')
+        END as week_start,
+        MAX(COALESCE(s.price_confirmed, s.price_quoted, 0)) as best_price,
+        s.season
+      FROM stays s
+      WHERE s.status IN ('confirmed','paid')
+      GROUP BY week_start, s.season
+      HAVING best_price >= 1000
+    )
+    SELECT season, COUNT(*) as weeks, ROUND(SUM(best_price),0) as revenue
+    FROM week_prices
+    GROUP BY season
+    ORDER BY season
+  `).all();
+
+  const seasonsMap = new Map();
+  for (const w of seasonSummaries) {
+    seasonsMap.set(w.season, {
+      season: w.season,
+      label: w.season.replace('-', ' - '),
+      totalStays: w.weeks,
+      totalRevenue: w.revenue,
+      occupancyWeeks: w.weeks,
+      contactsCount: 0,
+      newContacts: 0,
+    });
+  }
 
   // Séjours à venir : check_in > aujourd'hui, non annulés
+  const allStays = db.prepare(`
+    SELECT s.*, c.name AS contact_name, c.status AS contact_status
+    FROM stays s JOIN contacts c ON c.id = s.contact_id
+  `).all();
   const upcoming = allStays.filter(s => s.check_in > now && s.status !== 'cancelled');
 
   // Emails reçus ce mois-ci
@@ -90,40 +129,6 @@ app.get('/api/stats', (req, res) => {
   const newInquiries = db.prepare(
     "SELECT COUNT(*) as c FROM contacts WHERE status = 'prospect' AND last_contact_date >= ?"
   ).get(currentMonthStart).c;
-
-  // Season summaries — compter par SEMAINE unique pas par séjour (évite les doublons DeepSeek)
-  const seasonWeeks = db.prepare(`
-    WITH weeks AS (
-      SELECT 
-        CASE CAST(strftime('%w', s.check_in) AS INTEGER)
-          WHEN 0 THEN date(s.check_in, '-' || (6) || ' days')
-          ELSE date(s.check_in, '-' || (CAST(strftime('%w', s.check_in) AS INTEGER) - 1) || ' days')
-        END as week_start,
-        ROUND(SUM(COALESCE(s.price_confirmed, s.price_quoted, 0)),0) as week_revenue,
-        s.season
-      FROM stays s
-      WHERE s.status IN ('confirmed','paid')
-      GROUP BY week_start, s.season
-      HAVING week_revenue > 1500
-    )
-    SELECT season, COUNT(*) as booked_weeks, ROUND(SUM(week_revenue),0) as revenue
-    FROM weeks
-    GROUP BY season
-    ORDER BY season
-  `).all();
-
-  const seasonsMap = new Map();
-  for (const w of seasonWeeks) {
-    seasonsMap.set(w.season, {
-      season: w.season,
-      label: w.season.replace('-', ' - '),
-      totalStays: w.booked_weeks,
-      totalRevenue: w.revenue,
-      occupancyWeeks: w.booked_weeks,
-      contactsCount: 0,
-      newContacts: 0,
-    });
-  }
 
   // Demandes à confirmer : stays pending avec check_in >= aujourd'hui, triées par check_in ASC
   const pendingStays = db.prepare(`
