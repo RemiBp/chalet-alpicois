@@ -233,8 +233,8 @@ async function processEmails() {
   const markParsed = db.prepare('UPDATE emails SET parsed = 1 WHERE id = ?');
   let parsed = 0, contacts = 0, stays = 0, replies = 0;
 
-  for (let i = 0; i < emails.length; i += 3) {
-    const batch = emails.slice(i, i + 3);
+  for (let i = 0; i < emails.length; i += 10) {
+    const batch = emails.slice(i, i + 10);
 
     await Promise.all(batch.map(async (email) => {
       try {
@@ -292,7 +292,7 @@ async function processEmails() {
     }));
 
     // Petite pause entre les lots pour respecter les limites API
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 200));
   }
 
   console.log(`\n\n✅ Résultats :`);
