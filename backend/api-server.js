@@ -181,6 +181,90 @@ app.get('/api/stays', (req, res) => {
   })));
 });
 
+// ─── GET /api/auto-replies ────────────────────────
+
+app.get('/api/auto-replies', (req, res) => {
+  const rows = db.prepare(`
+    SELECT ar.*, c.name AS contact_name, c.email AS contact_email
+    FROM auto_replies ar JOIN contacts c ON c.id = ar.contact_id
+    ORDER BY ar.created_at DESC
+  `).all();
+
+  res.json(rows.map(r => ({
+    ...toCamel(r),
+    id: String(r.id),
+    emailId: r.email_id,
+    contactId: r.contact_id,
+    contactName: r.contact_name,
+    contactEmail: r.contact_email,
+    replyType: r.reply_type,
+    replySubject: r.reply_subject,
+    replyBody: r.reply_body,
+    alternativeWeeks: (() => { try { return JSON.parse(r.alternative_weeks || '[]'); } catch { return []; } })(),
+    status: r.status,
+    createdAt: r.created_at,
+    sentAt: r.sent_at,
+  })));
+});
+
+// ─── PUT /api/auto-replies/:id/approve ────────────
+
+app.put('/api/auto-replies/:id/approve', (req, res) => {
+  const result = db.prepare("UPDATE auto_replies SET status = 'approved' WHERE id = ?").run(req.params.id);
+  res.json({ success: result.changes > 0 });
+});
+
+// ─── PUT /api/auto-replies/:id/cancel ─────────────
+
+app.put('/api/auto-replies/:id/cancel', (req, res) => {
+  const result = db.prepare("UPDATE auto_replies SET status = 'cancelled' WHERE id = ?").run(req.params.id);
+  res.json({ success: result.changes > 0 });
+});
+
+// ─── PUT /api/auto-replies/:id/send ───────────────
+
+app.put('/api/auto-replies/:id/send', (req, res) => {
+  const result = db.prepare("UPDATE auto_replies SET status = 'sent', sent_at = datetime('now') WHERE id = ?").run(req.params.id);
+  res.json({ success: result.changes > 0 });
+});
+
+// ─── GET /api/auto-reply-rules ────────────────────
+
+app.get('/api/auto-reply-rules', (req, res) => {
+  const rows = db.prepare('SELECT * FROM auto_reply_rules ORDER BY created_at DESC').all();
+  res.json(rows.map(r => ({
+    ...toCamel(r),
+    isActive: !!r.is_active,
+  })));
+});
+
+// ─── POST /api/auto-reply-rules ───────────────────
+
+app.post('/api/auto-reply-rules', (req, res) => {
+  const { name, matchKeywords, minPrice, maxPrice, minNights, maxNights, replyTemplate } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  db.prepare(`INSERT INTO auto_reply_rules (id, name, match_keywords, min_price, max_price, min_nights, max_nights, reply_template) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, name, matchKeywords || '', minPrice || 0, maxPrice || 99999, minNights || 1, maxNights || 14, replyTemplate || '');
+  res.json({ success: true, id });
+});
+
+// ─── PUT /api/auto-reply-rules/:id/toggle ─────────
+
+app.put('/api/auto-reply-rules/:id/toggle', (req, res) => {
+  const rule = db.prepare('SELECT is_active FROM auto_reply_rules WHERE id = ?').get(req.params.id);
+  if (!rule) return res.status(404).json({ error: 'Rule not found' });
+  db.prepare('UPDATE auto_reply_rules SET is_active = ? WHERE id = ?').run(rule.is_active ? 0 : 1, req.params.id);
+  res.json({ success: true });
+});
+
+// ─── DELETE /api/auto-reply-rules/:id ─────────────
+
+app.delete('/api/auto-reply-rules/:id', (req, res) => {
+  db.prepare('DELETE FROM auto_reply_rules WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
 // ─── START ────────────────────────────────────────
 
 app.listen(PORT, () => {

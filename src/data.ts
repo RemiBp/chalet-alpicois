@@ -1,4 +1,4 @@
-import type { Contact, Email, DashboardStats, SeasonSummary, StayRecord } from './types';
+import type { Contact, Email, DashboardStats, SeasonSummary, StayRecord, AutoReply, AutoReplyRule } from './types';
 
 // ─── API CONFIG ───────────────────────────────────
 
@@ -336,6 +336,60 @@ export async function fetchDashboardStats(): Promise<DashboardStats> {
 
 export async function fetchStays(): Promise<StayRecord[]> {
   return fetchJson<StayRecord[]>(`${API_BASE}/stays`, getAllStaysMock());
+}
+
+export async function fetchAutoReplies(): Promise<AutoReply[]> {
+  return fetchJson<AutoReply[]>(`${API_BASE}/auto-replies`, []);
+}
+
+export async function approveReply(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auto-replies/${id}/approve`, { method: 'PUT' });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function sendReply(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auto-replies/${id}/send`, { method: 'PUT' });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function cancelReply(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auto-replies/${id}/cancel`, { method: 'PUT' });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function fetchAutoReplyRules(): Promise<AutoReplyRule[]> {
+  return fetchJson<AutoReplyRule[]>(`${API_BASE}/auto-reply-rules`, []);
+}
+
+export async function createAutoReplyRule(rule: Partial<AutoReplyRule>): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auto-reply-rules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rule),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function toggleAutoReplyRule(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auto-reply-rules/${id}/toggle`, { method: 'PUT' });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function deleteAutoReplyRule(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auto-reply-rules/${id}`, { method: 'DELETE' });
+    return res.ok;
+  } catch { return false; }
 }
 
 // ============ SYNC HELPERS (used inside fetchDashboardStats fallback) ============
