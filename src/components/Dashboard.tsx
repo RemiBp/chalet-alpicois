@@ -196,6 +196,13 @@ export default function Dashboard() {
 
   useEffect(loadData, []);
 
+  // Recharger quand on revient sur l'onglet
+  useEffect(() => {
+    const handleFocus = () => loadData();
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
+
   const confirmStay = async (id: string) => {
     const ok = await updateStay(id, { status: 'confirmed' });
     setActionMsg({ text: ok ? 'Séjour confirmé ✓' : 'Erreur de confirmation', ok });
