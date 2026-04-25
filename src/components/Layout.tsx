@@ -1,11 +1,13 @@
 import { type ViewType } from '../types';
-import { LayoutDashboard, CalendarDays, Users, Target, Mail, Settings, Mountain, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Users, Target, Mail, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil } from 'lucide-react';
 import { useState } from 'react';
 
 interface LayoutProps {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
   children: React.ReactNode;
+  isAdmin?: boolean;
+  onToggleAdmin?: () => void;
 }
 
 const navItems: { view: ViewType; label: string; icon: typeof LayoutDashboard }[] = [
@@ -17,7 +19,7 @@ const navItems: { view: ViewType; label: string; icon: typeof LayoutDashboard }[
   { view: 'settings', label: 'Paramètres', icon: Settings },
 ];
 
-export default function Layout({ currentView, onNavigate, children }: LayoutProps) {
+export default function Layout({ currentView, onNavigate, children, isAdmin, onToggleAdmin }: LayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -103,8 +105,39 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
           })}
         </nav>
 
-        {/* Collapse toggle */}
-        <div style={{ padding: '8px', borderTop: '1px solid var(--border-color)' }}>
+        {/* Admin toggle & collapse */}
+        <div style={{ padding: '8px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {/* Admin mode button */}
+          {onToggleAdmin && (
+            <button
+              onClick={onToggleAdmin}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: collapsed ? '8px 0' : '6px 10px',
+                borderRadius: 8,
+                border: `1px solid ${isAdmin ? 'var(--warning)' : 'transparent'}`,
+                background: isAdmin ? 'var(--warning-dim)' : 'transparent',
+                color: isAdmin ? 'var(--warning)' : 'var(--text-muted)',
+                fontSize: 11,
+                fontWeight: 500,
+                cursor: 'pointer',
+                width: '100%',
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                transition: 'all 0.15s ease',
+              }}
+              title={isAdmin ? 'Mode admin activé - cliquez pour désactiver' : 'Activer le mode édition'}
+            >
+              {isAdmin ? <Unlock size={14} /> : <Lock size={14} />}
+              {!collapsed && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {isAdmin ? 'Admin ON' : 'Admin OFF'}
+                  {isAdmin && <Pencil size={11} />}
+                </span>
+              )}
+            </button>
+          )}
           <button
             onClick={() => setCollapsed(!collapsed)}
             style={{
@@ -126,7 +159,28 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
       </aside>
 
       {/* Main content */}
-      <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-body)' }}>
+      <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-body)', position: 'relative' }}>
+        {/* Admin mode indicator bar */}
+        {isAdmin && (
+          <div style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 100,
+            background: 'linear-gradient(90deg, #d97706, #f59e0b)',
+            padding: '4px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            fontSize: 10,
+            fontWeight: 600,
+            color: 'white',
+            letterSpacing: '0.05em',
+          }}>
+            <Pencil size={12} />
+            MODE ADMIN — Les données sont modifiables. Cliquez sur les textes pour les éditer.
+          </div>
+        )}
         {children}
       </main>
     </div>

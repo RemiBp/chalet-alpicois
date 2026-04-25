@@ -7,16 +7,18 @@ import EmailsView from './components/EmailsView';
 import SettingsView from './components/SettingsView';
 import ProspectsView from './components/ProspectsView';
 import type { ViewType } from './types';
+import { useAdminMode } from './hooks/useAdminMode';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewType>('dashboard');
+  const { isAdmin, toggleAdmin } = useAdminMode();
 
   function handleNavigate(view: ViewType) {
     setCurrentView(view);
   }
 
   return (
-    <Layout currentView={currentView} onNavigate={handleNavigate}>
+    <Layout currentView={currentView} onNavigate={handleNavigate} isAdmin={isAdmin} onToggleAdmin={toggleAdmin}>
       {currentView === 'dashboard' && <Dashboard />}
       {currentView === 'calendar' && <CalendarView />}
       {currentView === 'contacts' && <ContactsView />}
