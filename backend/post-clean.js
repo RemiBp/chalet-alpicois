@@ -209,6 +209,29 @@ function fixStays() {
     db.prepare('DELETE FROM stays WHERE contact_id NOT IN (SELECT id FROM contacts)').run();
     console.log(`   🗑️ ${orphans} séjours orphelins supprimés`);
   }
+
+  // Supprimer les séjours pending SANS PRIX des contacts leboncoin ou info@la-plagne (simples demandes)
+  const noise = db.prepare(`
+    DELETE FROM stays WHERE id IN (
+      SELECT s.id FROM stays s
+      JOIN contacts c ON c.id = s.contact_id
+      WHERE s.status = 'pending'
+        AND (s.price_quoted = 0 AND s.price_confirmed = 0)
+        AND (c.email LIKE '%leboncoin%' OR c.email LIKE '%info@la-plagne%' OR c.email LIKE '%airbnb%')
+    )
+  `).run();
+  if (noise.changes > 0) {
+    console.log(`   🗑️ ${noise.changes} séjours "bruit" supprimés (leboncoin/info sans prix)`);
+  }
+
+  // Supprimer les contacts qui n'ont plus aucun stay après nettoyage (s'ils sont prospects et leboncoin)
+  const emptyContacts = db.prepare(`
+    DELETE FROM contacts WHERE id NOT IN (SELECT DISTINCT contact_id FROM stays)
+    AND email LIKE '%leboncoin%'
+  `).run();
+  if (emptyContacts.changes > 0) {
+    console.log(`   🗑️ ${emptyContacts.changes} contacts vides supprimés (leboncoin sans séjour)`);
+  }
 }
 
 // ============ ÉTAPE 4b : DÉDOUBLONNAGE SÉJOURS ============
