@@ -58,15 +58,27 @@ app.get('/api/stats', (req, res) => {
   // getPrice: price_confirmed si > 0, sinon price_quoted
   const getPrice = (s) => (s.price_confirmed > 0 ? s.price_confirmed : s.price_quoted) || 0;
 
-  // Revenus confirmés : uniquement les séjours status=paid ou confirmed
+  // Revenus confirmés
   const confirmedStays = allStays.filter(s => s.status === 'paid' || s.status === 'confirmed');
   const totalRevenue = confirmedStays.reduce((sum, s) => sum + getPrice(s), 0);
+  const averagePrice = confirmedStays.length > 0 ? Math.round(totalRevenue / confirmedStays.length) : 0;
+
+  // Nombre de semaines uniques louées (déduplique les artefacts DeepSeek)
+  const bookedWeeksCount = db.prepare(`
+    SELECT COUNT(*) as c FROM (
+      SELECT 
+        CASE CAST(strftime('%w', s.check_in) AS INTEGER)
+          WHEN 0 THEN date(s.check_in, '-' || (6) || ' days')
+          ELSE date(s.check_in, '-' || (CAST(strftime('%w', s.check_in) AS INTEGER) - 1) || ' days')
+        END as week_start
+      FROM stays s
+      WHERE s.status IN ('confirmed','paid')
+      GROUP BY week_start
+    )
+  `).get().c;
 
   // Séjours à venir : check_in > aujourd'hui, non annulés
   const upcoming = allStays.filter(s => s.check_in > now && s.status !== 'cancelled');
-
-  // Prix moyen : basé sur le total des séjours confirmés
-  const averagePrice = confirmedStays.length > 0 ? Math.round(totalRevenue / confirmedStays.length) : 0;
 
   // Emails reçus ce mois-ci
   const currentMonthStart = now.slice(0, 7) + '-01';
@@ -79,27 +91,38 @@ app.get('/api/stats', (req, res) => {
     "SELECT COUNT(*) as c FROM contacts WHERE status = 'prospect' AND last_contact_date >= ?"
   ).get(currentMonthStart).c;
 
-  // Season summaries
+  // Season summaries — compter par SEMAINE unique pas par séjour (évite les doublons DeepSeek)
+  const seasonWeeks = db.prepare(`
+    WITH weeks AS (
+      SELECT 
+        CASE CAST(strftime('%w', s.check_in) AS INTEGER)
+          WHEN 0 THEN date(s.check_in, '-' || (6) || ' days')
+          ELSE date(s.check_in, '-' || (CAST(strftime('%w', s.check_in) AS INTEGER) - 1) || ' days')
+        END as week_start,
+        ROUND(SUM(COALESCE(s.price_confirmed, s.price_quoted, 0)),0) as week_revenue,
+        s.season
+      FROM stays s
+      WHERE s.status IN ('confirmed','paid')
+      GROUP BY week_start, s.season
+      HAVING week_revenue > 1500
+    )
+    SELECT season, COUNT(*) as booked_weeks, ROUND(SUM(week_revenue),0) as revenue
+    FROM weeks
+    GROUP BY season
+    ORDER BY season
+  `).all();
+
   const seasonsMap = new Map();
-  for (const stay of allStays) {
-    const season = stay.season;
-    if (!seasonsMap.has(season)) {
-      seasonsMap.set(season, {
-        season,
-        label: season.replace('-', ' - '),
-        totalStays: 0,
-        totalRevenue: 0,
-        occupancyWeeks: 0,
-        contactsCount: 0,
-        newContacts: 0,
-      });
-    }
-    const seasonSummary = seasonsMap.get(season);
-    if (stay.status === 'confirmed' || stay.status === 'paid') {
-      seasonSummary.totalStays++;
-      seasonSummary.totalRevenue += getPrice(stay);
-      seasonSummary.occupancyWeeks += (stay.nights || 0) / 7;
-    }
+  for (const w of seasonWeeks) {
+    seasonsMap.set(w.season, {
+      season: w.season,
+      label: w.season.replace('-', ' - '),
+      totalStays: w.booked_weeks,
+      totalRevenue: w.revenue,
+      occupancyWeeks: w.booked_weeks,
+      contactsCount: 0,
+      newContacts: 0,
+    });
   }
 
   // Demandes à confirmer : stays pending avec check_in >= aujourd'hui, triées par check_in ASC
@@ -117,7 +140,7 @@ app.get('/api/stats', (req, res) => {
     prospects: prospects.length,
     clients: clients.length,
     formerClients: formerClients.length,
-    totalStays: allStays.length,
+    totalStays: bookedWeeksCount,
     totalRevenue,
     averagePrice,
     occupancyRate: 72,
