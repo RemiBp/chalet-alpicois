@@ -211,6 +211,84 @@ function fixStays() {
   }
 }
 
+// ============ ÉTAPE 4b : DÉDOUBLONNAGE SÉJOURS ============
+
+function deduplicateStays() {
+  console.log('\n📋 Étape 4b : Dédoublonnage des séjours');
+
+  let totalDeleted = 0;
+  let totalKept = 0;
+
+  // Parcourir chaque contact qui a des stays
+  const contacts = db.prepare('SELECT id, name FROM contacts').all();
+
+  for (const contact of contacts) {
+    const stays = db.prepare('SELECT * FROM stays WHERE contact_id = ? ORDER BY check_in, status DESC').all(contact.id);
+    if (stays.length <= 1) continue;
+
+    const kept = new Set();
+    const deleted = new Set();
+
+    for (let i = 0; i < stays.length; i++) {
+      if (deleted.has(stays[i].id)) continue;
+      kept.add(stays[i].id);
+
+      const s1 = stays[i];
+      const d1in = new Date(s1.check_in).getTime();
+      const d1out = new Date(s1.check_out || s1.check_in).getTime();
+
+      for (let j = i + 1; j < stays.length; j++) {
+        if (deleted.has(stays[j].id)) continue;
+        const s2 = stays[j];
+        const d2in = new Date(s2.check_in).getTime();
+        const d2out = new Date(s2.check_out || s2.check_in).getTime();
+
+        // Chevauchement : si les périodes se touchent ou se chevauchent
+        const overlap = !(d1out <= d2in || d2out <= d1in);
+        // Même date exacte
+        const sameDate = s1.check_in === s2.check_in;
+
+        // Pas de chevauchement ni même date → deux séjours distincts
+        if (!overlap && !sameDate) continue;
+
+        // Sinon, c'est un doublon — garder le meilleur
+        // Priorité : confirmed > paid > pending, puis price_confirmed > 0, puis le plus récent
+        const s1Score = (s1.status === 'confirmed' || s1.status === 'paid') ? 100 : 0
+          + (s1.price_confirmed > 0 ? 50 : 0)
+          + (s1.price_quoted > 0 ? 10 : 0);
+        const s2Score = (s2.status === 'confirmed' || s2.status === 'paid') ? 100 : 0
+          + (s2.price_confirmed > 0 ? 50 : 0)
+          + (s2.price_quoted > 0 ? 10 : 0);
+
+        // Si les deux ont le même score, garder le plus récent
+        if (s2Score > s1Score) {
+          // On garde s2, on supprime s1
+          kept.delete(s1.id);
+          s1.id = s2.id; // hack pour dire "on a changé"
+          const temp = s1Score;
+          // actually: swap — garder s2
+          kept.add(s2.id);
+          deleted.delete(s2.id);
+          deleted.add(s1.id);
+        } else {
+          deleted.add(s2.id);
+        }
+      }
+    }
+
+    for (const id of deleted) {
+      db.prepare('DELETE FROM stays WHERE id = ?').run(id);
+      totalDeleted++;
+    }
+    totalKept += kept.size;
+  }
+
+  // Mettre à jour total_stays pour tous les contacts
+  db.prepare(`UPDATE contacts SET total_stays = (SELECT COUNT(*) FROM stays WHERE contact_id = contacts.id)`).run();
+
+  console.log(`   ✅ ${totalDeleted} séjours en double supprimés, ${totalKept} séjours conservés`);
+}
+
 // ============ ÉTAPE 5 : STATS ============
 
 function finalStats() {
@@ -278,6 +356,7 @@ function main() {
   mergeDuplicateContacts();
   fixFormRelayContacts();
   fixStays();
+  deduplicateStays();
   fillNationalities();
 
   // Mise à jour des statuts

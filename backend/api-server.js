@@ -101,6 +101,15 @@ app.get('/api/stats', (req, res) => {
     seasonSummary.occupancyWeeks += (stay.nights || 0) / 7;
   }
 
+  // Demandes à confirmer : stays pending avec check_in >= aujourd'hui, triées par check_in ASC
+  const pendingStays = db.prepare(`
+    SELECT s.*, c.name AS contact_name
+    FROM stays s JOIN contacts c ON c.id = s.contact_id
+    WHERE s.status = 'pending' AND s.check_in >= ?
+    ORDER BY s.check_in ASC
+    LIMIT 10
+  `).all(now);
+
   res.json({
     currentSeason: '2025-2026',
     totalContacts: contacts.length,
@@ -115,6 +124,14 @@ app.get('/api/stats', (req, res) => {
     emailsReceivedThisMonth,
     newInquiries,
     pendingReplies: 0,
+    pendingStays: pendingStays.map(s => ({
+      id: s.id,
+      contactName: s.contact_name,
+      checkIn: s.check_in,
+      checkOut: s.check_out,
+      nights: s.nights || 7,
+      price: (s.price_confirmed > 0 ? s.price_confirmed : s.price_quoted) || 0,
+    })),
     seasons: Array.from(seasonsMap.values()),
   });
 });

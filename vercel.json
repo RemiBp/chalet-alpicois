@@ -3,6 +3,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm install",
+  "regions": ["cdg1"],
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
