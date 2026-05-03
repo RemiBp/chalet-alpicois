@@ -382,16 +382,37 @@ function main() {
   deduplicateStays();
   fillNationalities();
 
-  // Mise à jour des statuts
+  // Mise à jour des statuts : client / ancien client / prospect
   console.log('\n📋 Mise à jour des statuts...');
+
+  // Client actif = séjour confirmé/payé > 1500€ dans 2024-2025 ou 2025-2026
   db.prepare(`
     UPDATE contacts SET status = 'client' WHERE id IN (
       SELECT DISTINCT contact_id FROM stays 
       WHERE status IN ('confirmed', 'paid')
-        AND (price_confirmed > 500 OR (price_confirmed = 0 AND price_quoted > 500))
+        AND season IN ('2024-2025', '2025-2026')
+        AND (price_confirmed > 1500 OR (price_confirmed = 0 AND price_quoted > 1500))
     )
   `).run();
-  db.prepare("UPDATE contacts SET status = 'prospect' WHERE status != 'client'").run();
+
+  // Ancien client = séjour confirmé/payé > 1500€ mais PAS dans 2024-2025 ou 2025-2026
+  db.prepare(`
+    UPDATE contacts SET status = 'former_client' WHERE id IN (
+      SELECT DISTINCT contact_id FROM stays 
+      WHERE status IN ('confirmed', 'paid')
+        AND season NOT IN ('2024-2025', '2025-2026')
+        AND (price_confirmed > 1500 OR (price_confirmed = 0 AND price_quoted > 1500))
+    )
+    AND id NOT IN (
+      SELECT DISTINCT contact_id FROM stays 
+      WHERE status IN ('confirmed', 'paid')
+        AND season IN ('2024-2025', '2025-2026')
+        AND (price_confirmed > 1500 OR (price_confirmed = 0 AND price_quoted > 1500))
+    )
+  `).run();
+
+  // Tout le reste = prospect
+  db.prepare("UPDATE contacts SET status = 'prospect' WHERE status NOT IN ('client', 'former_client')").run();
 
   const totalClients = db.prepare("SELECT COUNT(*) as c FROM contacts WHERE status='client'").get().c;
   console.log(`   ✅ ${totalClients} clients, ${beforeContacts - totalClients - (beforeContacts - db.prepare('SELECT COUNT(*) as c FROM contacts').get().c)} prospects`);

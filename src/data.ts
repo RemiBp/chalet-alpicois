@@ -1,4 +1,4 @@
-import type { Contact, Email, DashboardStats, StayRecord, AutoReply, AutoReplyRule } from './types';
+import type { Contact, Email, DashboardStats, StayRecord, AutoReply, AutoReplyRule, ContactInteraction } from './types';
 
 const API_BASE = 'http://localhost:3001/api';
 
@@ -81,10 +81,89 @@ export async function updateStay(id: string, data: Partial<StayRecord>): Promise
   } catch { return false; }
 }
 
+export async function deleteStay(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/stays/${id}`, { method: 'DELETE' });
+    return res.ok;
+  } catch { return false; }
+}
+
+// ─── INTERACTIONS ──────────────────────────────────
+
+export async function fetchInteractions(contactId: string): Promise<ContactInteraction[]> {
+  return apiFetch<ContactInteraction[]>(`${API_BASE}/contacts/${contactId}/interactions`);
+}
+
+export async function createInteraction(contactId: string, data: Partial<ContactInteraction>): Promise<ContactInteraction> {
+  const res = await fetch(`${API_BASE}/contacts/${contactId}/interactions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+
+export async function updateInteraction(id: string, data: Partial<ContactInteraction>): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/interactions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function deleteInteraction(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/interactions/${id}`, { method: 'DELETE' });
+    return res.ok;
+  } catch { return false; }
+}
+
 // ─── STATS ────────────────────────────────────
 
 export async function fetchDashboardStats(): Promise<DashboardStats> {
   return apiFetch<DashboardStats>(`${API_BASE}/stats`);
+}
+
+export interface ClientAnalysis {
+  byNationality: {
+    nationality: string;
+    contacts: number;
+    clients: number;
+    former_clients: number;
+    prospects: number;
+    avg_price: number;
+    total_revenue: number;
+  }[];
+  loyalty: {
+    category: string;
+    contacts: number;
+    total_stays: number;
+  }[];
+  bySeason: {
+    period: string;
+    season: string;
+    unique_clients: number;
+    weeks: number;
+    revenue: number;
+  }[];
+  topClients: {
+    id: string;
+    name: string;
+    nationality: string;
+    email: string;
+    status: string;
+    staysCount: number;
+    totalPaid: number;
+    lastStay: string;
+  }[];
+}
+
+export async function fetchClientAnalysis(): Promise<ClientAnalysis> {
+  return apiFetch<ClientAnalysis>(`${API_BASE}/client-analysis`);
 }
 
 // ─── AUTO REPLIES ─────────────────────────────

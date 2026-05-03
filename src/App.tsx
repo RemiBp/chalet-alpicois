@@ -6,6 +6,7 @@ import ContactsView from './components/ContactsView';
 import EmailsView from './components/EmailsView';
 import SettingsView from './components/SettingsView';
 import ProspectsView from './components/ProspectsView';
+import ClientAnalysisView from './components/ClientAnalysisView';
 import type { ViewType } from './types';
 import { useAdminMode } from './hooks/useAdminMode';
 
@@ -25,6 +26,7 @@ export default function App() {
       {currentView === 'contact-detail' && <ContactsView />}
       {currentView === 'prospects' && <ProspectsView />}
       {currentView === 'emails' && <EmailsView />}
+      {currentView === 'client-analysis' && <ClientAnalysisView />}
       {currentView === 'settings' && <SettingsView />}
     </Layout>
   );

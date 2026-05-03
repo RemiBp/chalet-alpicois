@@ -18,6 +18,12 @@ export interface Email {
   folder: string;
 }
 
+export interface StayOptions {
+  draps?: boolean;
+  litsFaits?: boolean;
+  assuranceAnnulation?: boolean;
+}
+
 export interface StayRecord {
   id: string;
   contactId: string;
@@ -32,18 +38,25 @@ export interface StayRecord {
   status: StayStatus;
   sourceEmailId: string;
   notes: string;
+  options: StayOptions;
+  paymentMethod: string;
 }
 
 export interface Contact {
   id: string;
   name: string;
+  firstName: string;
   email: string;
+  alternateEmails: string[];
   phone: string;
   alternatePhones: string[];
   origin: ContactOrigin;
   originDetail: string;
   status: ContactStatus;
   nationality: string;
+  address: string;
+  postalCode: string;
+  country: string;
   firstContactDate: string;
   lastContactDate: string;
   stays: StayRecord[];
@@ -64,6 +77,16 @@ export interface RequestedWeek {
   children: number;
   status: 'asked' | 'negotiating' | 'abandoned' | 'booked';
   notes: string;
+}
+
+export interface ContactInteraction {
+  id: string;
+  contactId: string;
+  date: string;
+  type: ContactOrigin;
+  subject: string;
+  notes: string;
+  createdAt: string;
 }
 
 export interface AutoReply {
@@ -127,4 +150,4 @@ export interface DashboardStats {
   seasons: SeasonSummary[];
 }
 
-export type ViewType = 'dashboard' | 'calendar' | 'contacts' | 'contact-detail' | 'prospects' | 'emails' | 'auto-reply' | 'settings';
+export type ViewType = 'dashboard' | 'calendar' | 'contacts' | 'contact-detail' | 'prospects' | 'emails' | 'auto-reply' | 'settings' | 'client-analysis';

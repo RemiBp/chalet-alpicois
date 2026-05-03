@@ -369,53 +369,71 @@ function mergeDuplicateContacts() {
 
 function fixStatuses() {
   log('─'.repeat(46), '');
-  log('E', 'CORRECTION DES STATUTS');
+  log('E', 'CORRECTION DES STATUTS (1 client par semaine)');
 
-  // Règle : "client" UNIQUEMENT si au moins un séjour avec status='confirmed' ou 'paid' 
-  // ET prix (price_confirmed ou price_quoted) > 1000€
-  // Tout le reste → "prospect"
+  // Principe : une semaine = 1 location = 1 client payeur.
+  // Si plusieurs contacts partagent la même semaine (même check_in au lundi),
+  // seul le contact "principal" est marqué client.
+  // Les autres deviennent "prospect" (accompagnants).
 
-  const allContacts = db.prepare('SELECT * FROM contacts').all();
-  let clientCount = 0;
-  let demotedCount = 0;
-  let promotedCount = 0;
+  // 1. Trouver TOUS les stays confirmés/paid > 1500€ groupés par semaine
+  const allValid = db.prepare(`
+    SELECT s.*, c.name, c.email FROM stays s
+    JOIN contacts c ON c.id = s.contact_id
+    WHERE s.status IN ('confirmed','paid')
+      AND COALESCE(NULLIF(s.price_confirmed,0), s.price_quoted, 0) > 1500
+    ORDER BY s.check_in
+  `).all();
 
+  // Grouper par semaine (lundi)
+  const weekMap = new Map();
+  for (const s of allValid) {
+    const d = new Date(s.check_in);
+    const day = d.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    const wk = d.toISOString().split('T')[0];
+
+    if (!weekMap.has(wk)) weekMap.set(wk, []);
+    weekMap.get(wk).push(s);
+  }
+
+  // 2. Pour chaque semaine, élire le contact principal
+  const mainContactIds = new Set();
+
+  for (const [wk, stays] of weekMap) {
+    stays.sort((a, b) => {
+      const aScore = (a.status === 'confirmed' || a.status === 'paid' ? 100 : 0)
+        + (a.price_confirmed > 0 ? a.price_confirmed : a.price_quoted);
+      const bScore = (b.status === 'confirmed' || b.status === 'paid' ? 100 : 0)
+        + (b.price_confirmed > 0 ? b.price_confirmed : b.price_quoted);
+      return bScore - aScore;
+    });
+    mainContactIds.add(stays[0].contact_id);
+  }
+
+  // 3. Appliquer les statuts — tout le monde avec un séjour = client
   const updateStatus = db.prepare('UPDATE contacts SET status = ? WHERE id = ?');
+  const allContacts = db.prepare('SELECT * FROM contacts').all();
+  let clientCount = 0, prospectCount = 0;
 
   const tx = db.transaction(() => {
+    db.prepare("UPDATE contacts SET status = 'prospect'").run();
+
     for (const c of allContacts) {
-      const stays = db.prepare(`
-        SELECT * FROM stays WHERE contact_id = ?
-      `).all(c.id);
-
-      const hasValidStay = stays.some(s => {
-        if (s.status !== 'confirmed' && s.status !== 'paid') return false;
-        const price = s.price_confirmed > 0 ? s.price_confirmed : s.price_quoted;
-        return price > 1000;
-      });
-
-      const oldStatus = c.status;
-      const newStatus = hasValidStay ? 'client' : 'prospect';
-
-      if (newStatus !== oldStatus) {
-        updateStatus.run(newStatus, c.id);
-        if (newStatus === 'prospect') {
-          demotedCount++;
-          log('  ↓', `${c.name} <${c.email}> : ${oldStatus} → prospect`);
-        } else {
-          promotedCount++;
-          log('  ↑', `${c.name} <${c.email}> : ${oldStatus} → client`);
-        }
-      } else if (newStatus === 'client') {
-        clientCount++;
-      }
+      if (!mainContactIds.has(c.id)) continue;
+      updateStatus.run('client', c.id);
+      clientCount++;
     }
   });
   tx();
 
-  log('→', `${clientCount} clients conservés, ${promotedCount} promus, ${demotedCount} rétrogradés`);
-  log('📊', `Clients : ${db.prepare("SELECT COUNT(*) as c FROM contacts WHERE status = 'client'").get().c}`);
-  log('📊', `Prospects : ${db.prepare("SELECT COUNT(*) as c FROM contacts WHERE status = 'prospect'").get().c}`);
+  const dbClients = db.prepare("SELECT COUNT(*) as c FROM contacts WHERE status = 'client'").get().c;
+  const dbProspects = db.prepare("SELECT COUNT(*) as c FROM contacts WHERE status = 'prospect'").get().c;
+
+  log('→', `${clientCount} clients (contact principal de leur semaine)`);
+  log('📊', `Clients   : ${dbClients}`);
+  log('📊', `Prospects : ${dbProspects}`);
 }
 
 // ─────────────────────────────────────────────────────

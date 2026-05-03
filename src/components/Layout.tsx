@@ -1,5 +1,5 @@
 import { type ViewType } from '../types';
-import { LayoutDashboard, CalendarDays, Users, Target, Mail, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Users, Target, Mail, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, BarChart3 } from 'lucide-react';
 import { useState } from 'react';
 
 interface LayoutProps {
@@ -16,6 +16,7 @@ const navItems: { view: ViewType; label: string; icon: typeof LayoutDashboard }[
   { view: 'contacts', label: 'Contacts', icon: Users },
   { view: 'prospects', label: 'Prospects', icon: Target },
   { view: 'emails', label: 'Emails', icon: Mail },
+  { view: 'client-analysis', label: 'Analyse clients', icon: BarChart3 },
   { view: 'settings', label: 'Paramètres', icon: Settings },
 ];
 
