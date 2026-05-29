@@ -67,6 +67,20 @@ export interface Contact {
   updatedAt: string;
   messageCount?: number;
   lastSubject?: string;
+  profileJson?: ContactProfileData;
+  enrichedAt?: string;
+}
+
+export interface ContactProfileData {
+  summary?: string;
+  language?: string;
+  typicalAdults?: number;
+  typicalChildren?: number;
+  typicalTeens?: number;
+  preferences?: string[];
+  optionsMentioned?: StayOptions;
+  pricesMentioned?: { amount: number; context: string; date?: string }[];
+  enrichedAt?: string;
 }
 
 export interface RequestedWeek {

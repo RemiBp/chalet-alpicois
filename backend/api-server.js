@@ -2,12 +2,20 @@ import express from 'express';
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { existsSync } from 'fs';
 import cors from 'cors';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const DB_PATH = join(__dirname, '..', 'emails.db');
+function resolveDbPath() {
+  for (const p of [join(process.cwd(), 'emails.db'), join(__dirname, '..', 'emails.db')]) {
+    if (existsSync(p)) return p;
+  }
+  return join(process.cwd(), 'emails.db');
+}
+
+const DB_PATH = resolveDbPath();
 const PORT = process.env.API_PORT || 3001;
 
 const app = express();
@@ -16,12 +24,12 @@ app.use(express.json());
 
 let db;
 try {
-  db = new Database(DB_PATH);
+  db = new Database(DB_PATH, { readonly: process.env.VERCEL === '1' });
   db.pragma('journal_mode = WAL');
   console.log(`Connected to SQLite DB: ${DB_PATH}`);
 } catch (err) {
   console.error(`Failed to open database at ${DB_PATH}:`, err.message);
-  process.exit(1);
+  if (process.env.VERCEL !== '1') process.exit(1);
 }
 
 // ─── HELPERS ──────────────────────────────────────
@@ -146,6 +154,9 @@ app.get('/api/contacts', (req, res) => {
     camel.totalStays = 0;
     camel.messageCount = c.message_count || 0;
     camel.lastSubject = c.last_subject || '';
+    camel.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC LIMIT 3').all(c.id).map(toCamel);
+    try { camel.profileJson = JSON.parse(c.profile_json || '{}'); } catch { camel.profileJson = {}; }
+    camel.enrichedAt = c.enriched_at || '';
     return camel;
   });
 
@@ -162,9 +173,11 @@ app.get('/api/contacts/:id', (req, res) => {
   try { contact.alternatePhones = JSON.parse(row.alternate_phones || '[]'); } catch { contact.alternatePhones = []; }
   try { contact.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { contact.alternateEmails = []; }
   contact.stays = [];
-  contact.requestedWeeks = [];
+  contact.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC').all(req.params.id).map(toCamel);
   contact.totalStays = 0;
   contact.messageCount = db.prepare('SELECT COUNT(*) as c FROM emails WHERE contact_id = ?').get(req.params.id).c;
+  try { contact.profileJson = JSON.parse(row.profile_json || '{}'); } catch { contact.profileJson = {}; }
+  contact.enrichedAt = row.enriched_at || '';
 
   res.json(contact);
 });
@@ -236,6 +249,7 @@ app.put('/api/contacts/:id', (req, res) => {
     address: 'address', postalCode: 'postal_code', postal_code: 'postal_code',
     country: 'country', notes: 'notes',
     lastContactDate: 'last_contact_date', last_contact_date: 'last_contact_date',
+    firstContactDate: 'first_contact_date', first_contact_date: 'first_contact_date',
   };
 
   const updates = [];
@@ -603,13 +617,10 @@ app.get('/api/client-analysis', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`API server running on http://localhost:${PORT}`);
-  console.log('Endpoints:');
-  console.log(`  GET http://localhost:${PORT}/api/stats`);
-  console.log(`  GET http://localhost:${PORT}/api/client-analysis`);
-  console.log(`  GET http://localhost:${PORT}/api/emails`);
-  console.log(`  GET http://localhost:${PORT}/api/contacts`);
-  console.log(`  GET http://localhost:${PORT}/api/contacts/:id`);
-  console.log(`  GET http://localhost:${PORT}/api/stays`);
-});
+export default app;
+
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`API server running on http://localhost:${PORT}`);
+  });
+}
