@@ -65,6 +65,8 @@ export interface Contact {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  messageCount?: number;
+  lastSubject?: string;
 }
 
 export interface RequestedWeek {
@@ -134,20 +136,10 @@ export interface SeasonSummary {
 }
 
 export interface DashboardStats {
-  currentSeason: string;
   totalContacts: number;
-  prospects: number;
-  clients: number;
-  formerClients: number;
-  totalStays: number;
-  totalRevenue: number;
-  averagePrice: number;
-  occupancyRate: number;
-  upcomingStays: number;
-  emailsReceivedThisMonth: number;
-  newInquiries: number;
-  pendingReplies: number;
-  seasons: SeasonSummary[];
+  totalEmails: number;
+  emailsThisMonth: number;
+  recentContacts: number;
 }
 
-export type ViewType = 'dashboard' | 'calendar' | 'contacts' | 'contact-detail' | 'prospects' | 'emails' | 'auto-reply' | 'settings' | 'client-analysis';
+export type ViewType = 'dashboard' | 'calendar' | 'clients' | 'settings';

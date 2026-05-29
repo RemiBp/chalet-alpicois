@@ -1,5 +1,5 @@
 import { type ViewType } from '../types';
-import { LayoutDashboard, CalendarDays, Users, Target, Mail, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil } from 'lucide-react';
 import { useState } from 'react';
 
 interface LayoutProps {
@@ -13,11 +13,7 @@ interface LayoutProps {
 const navItems: { view: ViewType; label: string; icon: typeof LayoutDashboard }[] = [
   { view: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
   { view: 'calendar', label: 'Calendrier', icon: CalendarDays },
-  { view: 'contacts', label: 'Contacts', icon: Users },
-  { view: 'prospects', label: 'Prospects', icon: Target },
-  { view: 'emails', label: 'Emails', icon: Mail },
-  { view: 'client-analysis', label: 'Analyse clients', icon: BarChart3 },
-  { view: 'settings', label: 'Paramètres', icon: Settings },
+  { view: 'clients', label: 'Clients', icon: Users },
 ];
 
 export default function Layout({ currentView, onNavigate, children, isAdmin, onToggleAdmin }: LayoutProps) {
@@ -109,6 +105,29 @@ export default function Layout({ currentView, onNavigate, children, isAdmin, onT
         {/* Admin toggle & collapse */}
         <div style={{ padding: '8px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 4 }}>
           {/* Admin mode button */}
+          <button
+            onClick={() => onNavigate('settings')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: collapsed ? '8px 0' : '6px 10px',
+              borderRadius: 8,
+              border: `1px solid ${currentView === 'settings' ? 'var(--brand-border)' : 'transparent'}`,
+              background: currentView === 'settings' ? 'var(--brand-dim)' : 'transparent',
+              color: currentView === 'settings' ? 'var(--brand)' : 'var(--text-muted)',
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: 'pointer',
+              width: '100%',
+              justifyContent: collapsed ? 'center' : 'flex-start',
+              transition: 'all 0.15s ease',
+            }}
+            title="Paramètres"
+          >
+            <Settings size={14} />
+            {!collapsed && <span>Paramètres</span>}
+          </button>
           {onToggleAdmin && (
             <button
               onClick={onToggleAdmin}

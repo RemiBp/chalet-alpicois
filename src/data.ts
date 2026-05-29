@@ -1,6 +1,6 @@
 import type { Contact, Email, DashboardStats, StayRecord, AutoReply, AutoReplyRule, ContactInteraction } from './types';
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 async function apiFetch<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -14,8 +14,16 @@ export async function fetchEmails(): Promise<Email[]> {
   return apiFetch<Email[]>(`${API_BASE}/emails`);
 }
 
+export async function fetchContactEmails(contactId: string): Promise<Email[]> {
+  return apiFetch<Email[]>(`${API_BASE}/contacts/${contactId}/emails`);
+}
+
 export async function fetchEmailThread(threadId: string): Promise<Email[]> {
-  return apiFetch<Email[]>(`${API_BASE}/emails?threadId=${threadId}`);
+  return apiFetch<Email[]>(`${API_BASE}/emails?threadId=${encodeURIComponent(threadId)}`);
+}
+
+export async function fetchChaletConfig() {
+  return apiFetch<Record<string, unknown>>(`${API_BASE}/chalet`);
 }
 
 // ─── CONTACTS ─────────────────────────────────

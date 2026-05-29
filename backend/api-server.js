@@ -43,170 +43,109 @@ function nullableInt(val) {
 // ─── GET /api/stats ───────────────────────────────
 
 app.get('/api/stats', (req, res) => {
-  const now = new Date().toISOString().split('T')[0];
-
-  const contacts = db.prepare('SELECT * FROM contacts').all();
-
-  const clients = contacts.filter(c => c.status === 'client');
-  const prospects = contacts.filter(c => c.status === 'prospect');
-
-  // ═══════════════════════════════════════════════════
-  //  REVENUS RÉELS : 1 SEUL SÉJOUR PAR SEMAINE
-  //  On prend le MAX price_confirmed/price_quoted
-  //  par semaine pour éviter les doublons DeepSeek
-  // ═══════════════════════════════════════════════════
-  const revenueByWeek = db.prepare(`
-    WITH week_prices AS (
-      SELECT 
-        CASE CAST(strftime('%w', s.check_in) AS INTEGER)
-          WHEN 0 THEN date(s.check_in, '-' || (6) || ' days')
-          ELSE date(s.check_in, '-' || (CAST(strftime('%w', s.check_in) AS INTEGER) - 1) || ' days')
-        END as week_start,
-        MAX(COALESCE(s.price_confirmed, s.price_quoted, 0)) as best_price,
-        s.season
-      FROM stays s
-      WHERE s.status IN ('confirmed','paid')
-      GROUP BY week_start, s.season
-      HAVING best_price >= 1000
-    )
-    SELECT COUNT(*) as weeks, ROUND(SUM(best_price),0) as total_revenue
-    FROM week_prices
-  `).get();
-
-  const totalRevenue = revenueByWeek.total_revenue || 0;
-  const bookedWeeksCount = revenueByWeek.weeks || 0;
-  const averagePrice = bookedWeeksCount > 0 ? Math.round(totalRevenue / bookedWeeksCount) : 0;
-
-  // Season summaries — même logique 1 semaine max
-  const seasonSummaries = db.prepare(`
-    WITH week_prices AS (
-      SELECT 
-        CASE CAST(strftime('%w', s.check_in) AS INTEGER)
-          WHEN 0 THEN date(s.check_in, '-' || (6) || ' days')
-          ELSE date(s.check_in, '-' || (CAST(strftime('%w', s.check_in) AS INTEGER) - 1) || ' days')
-        END as week_start,
-        MAX(COALESCE(s.price_confirmed, s.price_quoted, 0)) as best_price,
-        s.season
-      FROM stays s
-      WHERE s.status IN ('confirmed','paid')
-      GROUP BY week_start, s.season
-      HAVING best_price >= 1000
-    )
-    SELECT season, COUNT(*) as weeks, ROUND(SUM(best_price),0) as revenue
-    FROM week_prices
-    GROUP BY season
-    ORDER BY season
-  `).all();
-
-  const seasonsMap = new Map();
-  for (const w of seasonSummaries) {
-    seasonsMap.set(w.season, {
-      season: w.season,
-      label: w.season.replace('-', ' - '),
-      totalStays: w.weeks,
-      totalRevenue: w.revenue,
-      occupancyWeeks: w.weeks,
-      contactsCount: 0,
-      newContacts: 0,
-    });
-  }
-
-  // Séjours à venir : check_in > aujourd'hui, non annulés
-  const allStays = db.prepare(`
-    SELECT s.*, c.name AS contact_name, c.status AS contact_status
-    FROM stays s JOIN contacts c ON c.id = s.contact_id
-  `).all();
-  const upcoming = allStays.filter(s => s.check_in > now && s.status !== 'cancelled');
-
-  // Emails reçus ce mois-ci
-  const currentMonthStart = now.slice(0, 7) + '-01';
-  const emailsReceivedThisMonth = db.prepare(
+  const totalContacts = db.prepare('SELECT COUNT(*) as c FROM contacts').get().c;
+  const totalEmails = db.prepare('SELECT COUNT(*) as c FROM emails WHERE contact_id IS NOT NULL').get().c;
+  const monthStart = new Date().toISOString().slice(0, 7) + '-01';
+  const emailsThisMonth = db.prepare(
     "SELECT COUNT(*) as c FROM emails WHERE mailbox = 'INBOX' AND date >= ?"
-  ).get(currentMonthStart).c;
-
-  // Nouvelles demandes : prospects créés ce mois (last_contact_date >= début du mois)
-  const newInquiries = db.prepare(
-    "SELECT COUNT(*) as c FROM contacts WHERE status = 'prospect' AND last_contact_date >= ?"
-  ).get(currentMonthStart).c;
-
-  // Demandes à confirmer : stays pending avec check_in >= aujourd'hui, triées par check_in ASC
-  const pendingStays = db.prepare(`
-    SELECT s.*, c.name AS contact_name
-    FROM stays s JOIN contacts c ON c.id = s.contact_id
-    WHERE s.status = 'pending' AND s.check_in >= ?
-    ORDER BY s.check_in ASC
-    LIMIT 10
-  `).all(now);
+  ).get(monthStart).c;
+  const recentContacts = db.prepare(
+    "SELECT COUNT(*) as c FROM contacts WHERE last_contact_date >= ?"
+  ).get(monthStart).c;
 
   res.json({
-    currentSeason: '2025-2026',
-    totalContacts: contacts.length,
-    prospects: prospects.length,
-    clients: clients.length,
-    totalStays: bookedWeeksCount,
-    totalRevenue,
-    averagePrice,
-    occupancyRate: 72,
-    upcomingStays: upcoming.length,
-    emailsReceivedThisMonth,
-    newInquiries,
-    pendingReplies: 0,
-    pendingStays: pendingStays.map(s => ({
-      id: s.id,
-      contactName: s.contact_name,
-      checkIn: s.check_in,
-      checkOut: s.check_out,
-      nights: s.nights || 7,
-      price: (s.price_confirmed > 0 ? s.price_confirmed : s.price_quoted) || 0,
-    })),
-    seasons: Array.from(seasonsMap.values()),
+    totalContacts,
+    totalEmails,
+    emailsThisMonth,
+    recentContacts,
+  });
+});
+
+// ─── GET /api/chalet ──────────────────────────────
+
+app.get('/api/chalet', (_req, res) => {
+  res.json({
+    name: "Chalet L'Alpicois",
+    location: 'La Plagne · Plagne Centre · 2050 m',
+    website: 'https://alpicois-laplagne.fr',
+    email: 'contact@alpicois-laplagne.fr',
+    capacity: 10,
+    surfaceM2: 130,
+    bedrooms: 4,
+    distancePistes: '200 m',
+    distanceCentre: '500 m',
+    domain: 'Paradiski',
+    rentalFormula: {
+      checkInDay: 'dimanche',
+      checkOutDay: 'dimanche',
+      cleaningIncluded: true,
+      note: 'Locations du dimanche au dimanche — ménage de fin de séjour inclus (hiver 2026-2027).',
+    },
+    amenities: [
+      'Salon avec cheminée', '4 chambres avec salle d\'eau', 'Local ski + sèche-chaussures',
+      'Wifi · 4G', 'Parking', 'Lave-linge', 'Agence partenaire',
+    ],
+    seasons: [
+      {
+        season: '2025-2026',
+        label: 'Hiver 2025-2026',
+        highSeason: { min: 3000, typical: 3800, note: 'Noël · Nouvel An · Février' },
+        midSeason: { min: 2200, typical: 2800, note: 'Mars · Avril · Été' },
+        lowSeason: { min: 1600, typical: 2200, note: 'Janvier' },
+      },
+      {
+        season: '2026-2027',
+        label: 'Hiver 2026-2027',
+        highSeason: { min: 3200, typical: 4000, note: 'Noël · Nouvel An · Février' },
+        midSeason: { min: 2400, typical: 3000, note: 'Mars · Avril · Été' },
+        lowSeason: { min: 1800, typical: 2400, note: 'Janvier' },
+      },
+    ],
   });
 });
 
 // ─── GET /api/emails ──────────────────────────────
 
 app.get('/api/emails', (req, res) => {
-  const rows = db.prepare('SELECT * FROM emails ORDER BY date DESC').all();
+  const { contactId, threadId } = req.query;
+  let rows;
+  if (contactId) {
+    rows = db.prepare('SELECT * FROM emails WHERE contact_id = ? ORDER BY date ASC').all(contactId);
+  } else if (threadId) {
+    rows = db.prepare('SELECT * FROM emails WHERE message_id = ? OR subject LIKE ? ORDER BY date ASC').all(threadId, `%${threadId}%`);
+  } else {
+    rows = db.prepare('SELECT * FROM emails ORDER BY date DESC').all();
+  }
   res.json(rows.map(r => ({
     ...toCamel(r),
     id: String(r.id),
     folder: r.mailbox,
     isFromGuest: !r.sender?.includes('alpicois-laplagne.fr'),
-    threadId: null,
+    threadId: r.message_id,
+    contactId: r.contact_id,
   })));
 });
 
 // ─── GET /api/contacts ────────────────────────────
 
 app.get('/api/contacts', (req, res) => {
-  const contactRows = db.prepare('SELECT * FROM contacts ORDER BY created_at DESC').all();
-  const stayRows = db.prepare('SELECT * FROM stays').all();
-  const rwRows = db.prepare('SELECT * FROM requested_weeks').all();
-
-  const staysByContact = new Map();
-  const rwByContact = new Map();
-
-  for (const stay of stayRows) {
-    if (!staysByContact.has(stay.contact_id)) staysByContact.set(stay.contact_id, []);
-    staysByContact.get(stay.contact_id).push(toCamel(stay));
-  }
-
-  for (const rw of rwRows) {
-    if (!rwByContact.has(rw.contact_id)) rwByContact.set(rw.contact_id, []);
-    rwByContact.get(rw.contact_id).push(toCamel(rw));
-  }
+  const contactRows = db.prepare(`
+    SELECT c.*,
+      (SELECT COUNT(*) FROM emails e WHERE e.contact_id = c.id) AS message_count,
+      (SELECT subject FROM emails e WHERE e.contact_id = c.id ORDER BY date DESC LIMIT 1) AS last_subject
+    FROM contacts c
+    ORDER BY c.last_contact_date DESC
+  `).all();
 
   const contacts = contactRows.map(c => {
     const camel = toCamel(c);
     try { camel.alternatePhones = JSON.parse(c.alternate_phones || '[]'); } catch { camel.alternatePhones = []; }
     try { camel.alternateEmails = JSON.parse(c.alternate_emails || '[]'); } catch { camel.alternateEmails = []; }
-    const stays = (staysByContact.get(c.id) || []).map(s => {
-      try { s.options = JSON.parse(s.options || '{}'); } catch { s.options = {}; }
-      return s;
-    });
-    camel.stays = stays;
-    camel.requestedWeeks = rwByContact.get(c.id) || [];
-    camel.totalStays = camel.stays.length;
+    camel.stays = [];
+    camel.requestedWeeks = [];
+    camel.totalStays = 0;
+    camel.messageCount = c.message_count || 0;
+    camel.lastSubject = c.last_subject || '';
     return camel;
   });
 
@@ -222,15 +161,26 @@ app.get('/api/contacts/:id', (req, res) => {
   const contact = toCamel(row);
   try { contact.alternatePhones = JSON.parse(row.alternate_phones || '[]'); } catch { contact.alternatePhones = []; }
   try { contact.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { contact.alternateEmails = []; }
-  contact.stays = db.prepare('SELECT * FROM stays WHERE contact_id = ?').all(req.params.id).map(s => {
-    const c = toCamel(s);
-    try { c.options = JSON.parse(s.options || '{}'); } catch { c.options = {}; }
-    return c;
-  });
-  contact.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ?').all(req.params.id).map(toCamel);
-  contact.totalStays = contact.stays.length;
+  contact.stays = [];
+  contact.requestedWeeks = [];
+  contact.totalStays = 0;
+  contact.messageCount = db.prepare('SELECT COUNT(*) as c FROM emails WHERE contact_id = ?').get(req.params.id).c;
 
   res.json(contact);
+});
+
+// ─── GET /api/contacts/:id/emails ─────────────────
+
+app.get('/api/contacts/:id/emails', (req, res) => {
+  const rows = db.prepare('SELECT * FROM emails WHERE contact_id = ? ORDER BY date ASC').all(req.params.id);
+  res.json(rows.map(r => ({
+    ...toCamel(r),
+    id: String(r.id),
+    folder: r.mailbox,
+    isFromGuest: !r.sender?.includes('alpicois-laplagne.fr'),
+    threadId: r.message_id,
+    contactId: r.contact_id,
+  })));
 });
 
 // ─── POST /api/contacts ────────────────────────────

@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:api": "cd backend && node api-server.js",
     "dev:all": "node -e \"const{spawn}=require('child_process');const api=spawn('node',['backend/api-server.js'],{stdio:'inherit',cwd:'.'});const vite=spawn('npx',['vite'],{stdio:'inherit',cwd:'.'});process.on('SIGINT',()=>{api.kill();vite.kill();process.exit()})\"",
+    "rebuild": "node backend/rebuild-conversations.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

@@ -1,0 +1,10 @@
+# Railway deployment — API backend with SQLite
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node backend/api-server.js"
+healthcheckPath = "/api/stats"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
