@@ -4,6 +4,7 @@ import Dashboard from './components/Dashboard';
 import CalendarView from './components/CalendarView';
 import ClientsView from './components/ClientsView';
 import SettingsView from './components/SettingsView';
+import DocumentGeneratorView from './components/DocumentGeneratorView';
 import type { ViewType } from './types';
 import { useAdminMode } from './hooks/useAdminMode';
 
@@ -16,6 +17,8 @@ export default function App() {
       {currentView === 'dashboard' && <Dashboard onNavigate={setCurrentView} />}
       {currentView === 'calendar' && <CalendarView />}
       {currentView === 'clients' && <ClientsView onNavigate={setCurrentView} />}
+      {currentView === 'invoices' && <DocumentGeneratorView mode="facture" />}
+      {currentView === 'contracts' && <DocumentGeneratorView mode="contrat" />}
       {currentView === 'settings' && <SettingsView />}
     </Layout>
   );

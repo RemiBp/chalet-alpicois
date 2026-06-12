@@ -156,4 +156,37 @@ export interface DashboardStats {
   recentContacts: number;
 }
 
-export type ViewType = 'dashboard' | 'calendar' | 'clients' | 'settings';
+export interface DocumentFormOverrides {
+  docSuffix?: string;
+  contractNumber?: string;
+  contractDate?: string;
+  issueDate?: string;
+  tenantName?: string;
+  tenantAddress1?: string;
+  tenantAddress2?: string;
+  tenantAddress3?: string;
+  tenantPostalCity?: string;
+  tenantPhone?: string;
+  tenantEmail?: string;
+  adults?: number | string;
+  children?: number | string;
+  checkIn?: string;
+  checkOut?: string;
+  nights?: number;
+  weeks?: number;
+  weeklyRent?: number;
+  rentalTotal?: number;
+  taxAdults?: number;
+  taxNights?: number;
+  touristTaxTotal?: number;
+  totalDue?: number;
+  deposit30?: number;
+  balance70?: number;
+  depositDueDate?: string;
+  balanceDueDate?: string;
+  tenantSignatureName?: string;
+}
+
+export type DocumentGenerateType = 'facture' | 'contrat' | 'pack';
+
+export type ViewType = 'dashboard' | 'calendar' | 'clients' | 'invoices' | 'contracts' | 'settings';

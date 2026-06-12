@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Users, Mail, MessageSquare, ArrowRight, Mountain } from 'lucide-react';
+import { Users, Mail, MessageSquare, ArrowRight, FileText, ScrollText } from 'lucide-react';
 import { fetchDashboardStats } from '../data';
 import type { ViewType } from '../types';
 import { CHALET } from '../config/chalet';
+
+const HERO_IMAGE = `${import.meta.env.BASE_URL}chalet-hero.png`;
 
 interface SimpleStats {
   totalContacts: number;
@@ -23,26 +25,52 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (view: ViewType
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      style={{ padding: 32, maxWidth: 640, margin: '0 auto' }}
+      style={{ padding: '24px 32px 32px', maxWidth: 720, margin: '0 auto' }}
     >
-      <div style={{ textAlign: 'center', marginBottom: 32 }}>
+      {/* Hero */}
+      <div style={{
+        position: 'relative',
+        borderRadius: 16,
+        overflow: 'hidden',
+        marginBottom: 28,
+        border: '1px solid var(--border-color)',
+        boxShadow: '0 8px 32px rgba(15, 23, 42, 0.08)',
+      }}>
+        <img
+          src={HERO_IMAGE}
+          alt={`${CHALET.name} en hiver — La Plagne`}
+          style={{
+            width: '100%',
+            height: 280,
+            objectFit: 'cover',
+            objectPosition: 'center 40%',
+            display: 'block',
+          }}
+        />
         <div style={{
-          width: 48, height: 48, borderRadius: 14, margin: '0 auto 16px',
-          background: 'linear-gradient(135deg, var(--brand), var(--brand-light))',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          position: 'absolute',
+          inset: 0,
+          background: 'linear-gradient(to top, rgba(15,23,42,0.75) 0%, rgba(15,23,42,0.15) 55%, transparent 100%)',
+        }} />
+        <div style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          padding: '20px 22px',
+          color: 'white',
         }}>
-          <Mountain size={24} color="white" />
+          <h1 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.2, textShadow: '0 1px 8px rgba(0,0,0,0.4)' }}>
+            {CHALET.name}
+          </h1>
+          <p style={{ fontSize: 13, opacity: 0.92, marginTop: 6 }}>
+            {CHALET.location} · {CHALET.domain}
+          </p>
         </div>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>
-          {CHALET.name}
-        </h1>
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>
-          {CHALET.location}
-        </p>
       </div>
 
       {stats && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
           {[
             { icon: Users, label: 'Contacts', value: stats.totalContacts, color: '#7c3aed' },
             { icon: MessageSquare, label: 'Messages', value: stats.totalEmails, color: '#0891b2' },
@@ -64,18 +92,31 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (view: ViewType
         </div>
       )}
 
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+        <button
+          type="button"
+          onClick={() => onNavigate?.('clients')}
+          style={primaryBtn}
+        >
+          Conversations
+          <ArrowRight size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate?.('contracts')}
+          style={secondaryBtn}
+        >
+          <ScrollText size={16} />
+          Contrats
+        </button>
+      </div>
       <button
         type="button"
-        onClick={() => onNavigate?.('clients')}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-          padding: '14px 20px', borderRadius: 12, border: 'none',
-          background: 'var(--brand)', color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          marginBottom: 20,
-        }}
+        onClick={() => onNavigate?.('invoices')}
+        style={{ ...secondaryBtn, width: '100%', marginBottom: 20 }}
       >
-        Voir les conversations
-        <ArrowRight size={16} />
+        <FileText size={16} />
+        Factures
       </button>
 
       <p style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.6 }}>
@@ -88,3 +129,16 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (view: ViewType
     </motion.div>
   );
 }
+
+const primaryBtn: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+  padding: '13px 16px', borderRadius: 12, border: 'none',
+  background: 'var(--brand)', color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+};
+
+const secondaryBtn: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+  padding: '13px 16px', borderRadius: 12,
+  border: '1px solid var(--border-color)', background: 'var(--bg-surface)',
+  color: 'var(--text-primary)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+};

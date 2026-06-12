@@ -4,6 +4,12 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import cors from 'cors';
+import {
+  previewDocumentFields,
+  generateContractDocx,
+  generateInvoiceDocx,
+  generateContractPackZip,
+} from './generate-documents.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -615,6 +621,68 @@ app.get('/api/client-analysis', (req, res) => {
       lastStay: r.last_stay,
     })),
   });
+});
+
+// ─── DOCUMENTS ADMINISTRATIFS ─────────────────────
+
+function loadContactForDocs(contactId) {
+  const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(contactId);
+  if (!row) return null;
+  const contact = toCamel(row);
+  try { contact.alternatePhones = JSON.parse(row.alternate_phones || '[]'); } catch { contact.alternatePhones = []; }
+  try { contact.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { contact.alternateEmails = []; }
+  contact.stays = db.prepare('SELECT * FROM stays WHERE contact_id = ? ORDER BY check_in DESC').all(contactId).map(toCamel);
+  contact.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC').all(contactId).map(toCamel);
+  try { contact.profileJson = JSON.parse(row.profile_json || '{}'); } catch { contact.profileJson = {}; }
+  return contact;
+}
+
+app.post('/api/documents/preview', (req, res) => {
+  try {
+    const { contactId, overrides = {} } = req.body || {};
+    const contact = contactId ? loadContactForDocs(contactId) : {};
+    const fields = previewDocumentFields(contact || {}, overrides);
+    res.json({ fields, contact: contact ? { id: contact.id, name: contact.name, email: contact.email } : null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/documents/generate', async (req, res) => {
+  try {
+    const { contactId, type, overrides = {} } = req.body || {};
+    if (!contactId) return res.status(400).json({ error: 'contactId requis' });
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+
+    const safeName = (contact.name || 'document').replace(/[^\w\s-àâäéèêëïîôùûüç-]/gi, '').trim().replace(/\s+/g, '_');
+
+    if (type === 'facture') {
+      const buf = generateInvoiceDocx(contact, overrides);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename="Facture_${safeName}.docx"`);
+      return res.send(buf);
+    }
+
+    if (type === 'contrat') {
+      const buf = generateContractDocx(contact, overrides);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename="Contrat_${safeName}.docx"`);
+      return res.send(buf);
+    }
+
+    if (type === 'pack') {
+      const buf = await generateContractPackZip(contact, overrides);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="Pack_Contrat_${safeName}.zip"`);
+      return res.send(buf);
+    }
+
+    res.status(400).json({ error: 'type invalide (facture | contrat | pack)' });
+  } catch (err) {
+    console.error('Document generation error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default app;

@@ -1,5 +1,5 @@
 import { type ViewType } from '../types';
-import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, ScrollText } from 'lucide-react';
 import { useState } from 'react';
 
 interface LayoutProps {
@@ -14,6 +14,8 @@ const navItems: { view: ViewType; label: string; icon: typeof LayoutDashboard }[
   { view: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
   { view: 'calendar', label: 'Calendrier', icon: CalendarDays },
   { view: 'clients', label: 'Clients', icon: Users },
+  { view: 'invoices', label: 'Factures', icon: FileText },
+  { view: 'contracts', label: 'Contrats', icon: ScrollText },
 ];
 
 export default function Layout({ currentView, onNavigate, children, isAdmin, onToggleAdmin }: LayoutProps) {

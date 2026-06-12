@@ -3,3 +3,6 @@ backend/node_modules
 backend/.env
 .git
 dist
+*.db-shm
+*.db-wal
+Administratif formats

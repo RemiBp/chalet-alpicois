@@ -1,5 +1,10 @@
-import type { Contact, Email, DashboardStats, StayRecord, AutoReply, AutoReplyRule, ContactInteraction } from './types';
+import type {
+  Contact, Email, DashboardStats, StayRecord, AutoReply, AutoReplyRule,
+  ContactInteraction, DocumentFormOverrides, DocumentGenerateType,
+} from './types';
 
+const STATIC_DATA = import.meta.env.PROD && !import.meta.env.VITE_API_URL;
+const DATA_BASE = `${import.meta.env.BASE_URL}data/`;
 const API_BASE = import.meta.env.VITE_API_URL
   || (import.meta.env.PROD ? '/api' : 'http://localhost:3001/api');
 
@@ -9,17 +14,35 @@ async function apiFetch<T>(url: string): Promise<T> {
   return res.json();
 }
 
+async function staticFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${DATA_BASE}${path}`);
+  if (!res.ok) throw new Error(`Static data ${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
 // ─── EMAILS ───────────────────────────────────
 
 export async function fetchEmails(): Promise<Email[]> {
+  if (STATIC_DATA) {
+    const byContact = await staticFetch<Record<string, Email[]>>('emails.json');
+    return Object.values(byContact).flat().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }
   return apiFetch<Email[]>(`${API_BASE}/emails`);
 }
 
 export async function fetchContactEmails(contactId: string): Promise<Email[]> {
+  if (STATIC_DATA) {
+    const byContact = await staticFetch<Record<string, Email[]>>('emails.json');
+    return byContact[contactId] || [];
+  }
   return apiFetch<Email[]>(`${API_BASE}/contacts/${contactId}/emails`);
 }
 
 export async function fetchEmailThread(threadId: string): Promise<Email[]> {
+  if (STATIC_DATA) {
+    const all = await fetchEmails();
+    return all.filter(e => e.threadId === threadId || e.subject?.includes(threadId));
+  }
   return apiFetch<Email[]>(`${API_BASE}/emails?threadId=${encodeURIComponent(threadId)}`);
 }
 
@@ -30,10 +53,15 @@ export async function fetchChaletConfig() {
 // ─── CONTACTS ─────────────────────────────────
 
 export async function fetchContacts(): Promise<Contact[]> {
+  if (STATIC_DATA) return staticFetch<Contact[]>('contacts.json');
   return apiFetch<Contact[]>(`${API_BASE}/contacts`);
 }
 
 export async function fetchContactById(id: string): Promise<Contact | null> {
+  if (STATIC_DATA) {
+    const details = await staticFetch<Record<string, Contact>>('details.json');
+    return details[id] || null;
+  }
   try {
     return await apiFetch<Contact>(`${API_BASE}/contacts/${id}`);
   } catch {
@@ -42,6 +70,7 @@ export async function fetchContactById(id: string): Promise<Contact | null> {
 }
 
 export async function createContact(contact: Partial<Contact>): Promise<Contact> {
+  if (STATIC_DATA) throw new Error('Lecture seule en production');
   const res = await fetch(`${API_BASE}/contacts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -52,6 +81,7 @@ export async function createContact(contact: Partial<Contact>): Promise<Contact>
 }
 
 export async function updateContact(id: string, data: Partial<Contact>): Promise<boolean> {
+  if (STATIC_DATA) return false;
   try {
     const res = await fetch(`${API_BASE}/contacts/${id}`, {
       method: 'PUT',
@@ -134,6 +164,7 @@ export async function deleteInteraction(id: string): Promise<boolean> {
 // ─── STATS ────────────────────────────────────
 
 export async function fetchDashboardStats(): Promise<DashboardStats> {
+  if (STATIC_DATA) return staticFetch<DashboardStats>('stats.json');
   return apiFetch<DashboardStats>(`${API_BASE}/stats`);
 }
 
@@ -235,4 +266,41 @@ export async function deleteAutoReplyRule(id: string): Promise<boolean> {
 
 export function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// ─── DOCUMENTS ────────────────────────────────
+
+const API_BASE_DOCS = import.meta.env.VITE_API_URL
+  || (import.meta.env.PROD ? '/api' : 'http://localhost:3001/api');
+
+export async function previewDocuments(contactId: string, overrides: DocumentFormOverrides = {}) {
+  const res = await fetch(`${API_BASE_DOCS}/documents/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contactId, overrides }),
+  });
+  if (!res.ok) throw new Error(`Preview ${res.status}`);
+  return res.json() as Promise<{ fields: Record<string, string>; contact: { id: string; name: string; email: string } | null }>;
+}
+
+export async function downloadDocument(contactId: string, type: DocumentGenerateType, overrides: DocumentFormOverrides = {}) {
+  const res = await fetch(`${API_BASE_DOCS}/documents/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contactId, type, overrides }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Génération ${res.status}`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match?.[1] || `document.${type === 'pack' ? 'zip' : 'docx'}`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
