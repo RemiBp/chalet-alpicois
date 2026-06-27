@@ -8,6 +8,7 @@
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { formatContactName } from './name-format.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || join(__dirname, '..', 'emails.db');
@@ -112,17 +113,25 @@ const insertContact = db.prepare(`
     id, name, first_name, email, alternate_emails, phone, alternate_phones,
     origin, origin_detail, status, nationality, address, postal_code, country,
     notes, first_contact_date, last_contact_date, total_stays, created_at, updated_at
-  ) VALUES (?, ?, '', ?, '[]', '', '[]', 'email', '', 'prospect', '', '', '', '', '', ?, ?, 0, datetime('now'), datetime('now'))
+  ) VALUES (?, ?, ?, ?, '[]', '', '[]', 'email', '', 'prospect', '', '', '', '', '', ?, ?, 0, datetime('now'), datetime('now'))
 `);
 
 const linkEmail = db.prepare('UPDATE emails SET contact_id = ? WHERE id = ?');
 
 const tx = db.transaction(() => {
   for (const [guestEmail, { emails: msgs, names }] of byGuest) {
-    const bestName = [...names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || guestEmail.split('@')[0];
+    const bestRaw = [...names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || guestEmail.split('@')[0];
+    const formatted = formatContactName(bestRaw, guestEmail);
     const dates = msgs.map(m => m.date).filter(Boolean).sort();
     const contactId = generateId();
-    insertContact.run(contactId, bestName, guestEmail, dates[0] || new Date().toISOString(), dates[dates.length - 1] || dates[0] || new Date().toISOString());
+    insertContact.run(
+      contactId,
+      formatted.lastName || formatted.displayName,
+      formatted.firstName || '',
+      guestEmail,
+      dates[0] || new Date().toISOString(),
+      dates[dates.length - 1] || dates[0] || new Date().toISOString(),
+    );
     for (const m of msgs) linkEmail.run(contactId, m.id);
   }
 });

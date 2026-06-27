@@ -6,15 +6,25 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "cd backend && node api-server.js",
-    "dev:all": "node -e \"const{spawn}=require('child_process');const api=spawn('node',['backend/api-server.js'],{stdio:'inherit',cwd:'.'});const vite=spawn('npx',['vite'],{stdio:'inherit',cwd:'.'});process.on('SIGINT',()=>{api.kill();vite.kill();process.exit()})\"",
+    "dev:all": "node -e \"const{spawn}=require('child_process');const api=spawn('node',['api-server.js'],{stdio:'inherit',cwd:'backend'});const vite=spawn('npx',['vite'],{stdio:'inherit',cwd:'.'});process.on('SIGINT',()=>{api.kill();vite.kill();process.exit()})\"",
     "rebuild": "node backend/rebuild-conversations.js",
     "enrich": "node backend/enrich-contacts.js",
+    "fix-bodies": "node backend/fix-email-bodies.js",
+    "format-names": "node backend/format-names.js",
+    "extract-profiles": "node backend/extract-profile.js",
     "export-data": "node backend/export-static-data.js",
+    "refresh": "npm run refresh --prefix backend",
+    "refresh:signals": "npm run refresh --prefix backend -- --skip-imap",
+    "setup-personal": "node backend/setup-personal-contact.js",
     "prepare-templates": "node backend/prepare-templates.js",
-    "prebuild": "npm run export-data && npm run prepare-templates",
+    "prebuild": "npm run export-data && npm run prepare-templates && npm run bundle-db && npm run copy-wasm",
+    "copy-wasm": "node scripts/copy-docx-wasm.mjs",
+    "bundle-db": "node scripts/bundle-deploy-db.mjs",
     "build": "tsc -b && vite build",
+    "test": "npm run test:all --prefix backend",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e:prod": "node scripts/e2e-prod-test.mjs"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",

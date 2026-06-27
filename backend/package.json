@@ -7,17 +7,28 @@
     "sync": "node sync.js",
     "sync:full": "node sync.js --full",
     "parse": "node parse-emails.js",
+    "format-names": "node format-names.js",
+    "format-names:dry": "node format-names.js --dry-run",
+    "upload-db-blob": "node upload-db-to-blob.js",
+    "refresh": "node refresh-pipeline.js",
+    "test:coherence": "node test-coherence.js",
+    "test:coherence:ai": "node test-coherence.js --ai",
+    "test:e2e": "node test-e2e.js",
+    "test:all": "node test-coherence.js && node test-imports.js && node test-email-ui.js && node test-e2e.js",
     "api": "node api-server.js",
     "start": "node api-server.js"
   },
   "dependencies": {
+    "@vercel/blob": "^2.4.0",
     "better-sqlite3": "^11.8.0",
     "cors": "^2.8.5",
+    "docx-to-pdf-wasm": "^0.1.0",
     "docxtemplater": "^3.68.7",
     "dotenv": "^16.4.7",
     "express": "^4.21.0",
     "imapflow": "^1.0.180",
     "jszip": "^3.10.1",
+    "nodemailer": "^8.0.11",
     "pizzip": "^3.2.0"
   }
 }

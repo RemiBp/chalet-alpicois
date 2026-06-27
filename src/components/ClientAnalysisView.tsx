@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Globe, TrendingUp, Users, Euro, Award } from 'lucide-react';
 import { fetchClientAnalysis } from '../data';
 import type { ClientAnalysis } from '../data';
+import { displayContactName } from '../lib/formatName';
 
 const statusColor: Record<string, string> = {
   client: '#059669',
@@ -35,7 +36,7 @@ export default function ClientAnalysisView() {
 
   useEffect(() => {
     setLoading(true);
-    fetchClientAnalysis().then(setData).finally(() => setLoading(false));
+    fetchClientAnalysis().then(setData).catch(() => setData(null)).finally(() => setLoading(false));
   }, []);
 
   const totalClients = useMemo(() => {
@@ -212,7 +213,7 @@ export default function ClientAnalysisView() {
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {c.name}
+                  {displayContactName(c)}
                   {c.nationality && (
                     <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>· {c.nationality}</span>
                   )}

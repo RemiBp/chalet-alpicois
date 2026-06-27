@@ -1,25 +1,84 @@
-import { type ViewType } from '../types';
-import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, ScrollText } from 'lucide-react';
-import { useState } from 'react';
+import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, Euro, History, AlertTriangle, Database, Eye, EyeOff } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { fetchApiHealth, fetchStaticDataMeta, getLastDataSource, markDataSourceLive, type ApiHealth, type StaticDataMeta } from '../data';
+import type { AdminActor } from '../lib/adminSession';
+import { routes, isNavActive, viewFromPath } from '../lib/routes';
+import type { ViewType } from '../types';
 
 interface LayoutProps {
-  currentView: ViewType;
-  onNavigate: (view: ViewType) => void;
   children: React.ReactNode;
   isAdmin?: boolean;
+  adminActor?: AdminActor | null;
   onToggleAdmin?: () => void;
+  loginOpen?: boolean;
+  loginError?: string | null;
+  loginLoading?: boolean;
+  onAdminLogin?: (password: string, actor: AdminActor) => void;
+  onAdminLoginCancel?: () => void;
 }
 
-const navItems: { view: ViewType; label: string; icon: typeof LayoutDashboard }[] = [
-  { view: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
-  { view: 'calendar', label: 'Calendrier', icon: CalendarDays },
-  { view: 'clients', label: 'Clients', icon: Users },
-  { view: 'invoices', label: 'Factures', icon: FileText },
-  { view: 'contracts', label: 'Contrats', icon: ScrollText },
+const mainNavItems: { view: ViewType; path: string; label: string; icon: typeof LayoutDashboard }[] = [
+  { view: 'dashboard', path: routes.home, label: 'Tableau de bord', icon: LayoutDashboard },
+  { view: 'calendar', path: routes.calendar, label: 'Calendrier', icon: CalendarDays },
+  { view: 'clients', path: routes.clients, label: 'Clients', icon: Users },
+  { view: 'documents', path: routes.documents, label: 'Documents', icon: FileText },
+  { view: 'finance', path: routes.finance, label: 'Finance', icon: Euro },
 ];
 
-export default function Layout({ currentView, onNavigate, children, isAdmin, onToggleAdmin }: LayoutProps) {
+const historiqueNav = { view: 'historique' as const, path: routes.historique, label: 'Historique et sync', icon: History };
+
+function navButtonStyle(collapsed: boolean, isActive: boolean) {
+  return {
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+    padding: collapsed ? '10px 0' : '8px 10px',
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: isActive ? 600 : 500,
+    color: isActive ? 'var(--brand)' : 'var(--text-secondary)',
+    background: isActive ? 'var(--brand-dim)' : 'transparent',
+    cursor: 'pointer' as const,
+    transition: 'background 0.12s ease, color 0.12s ease',
+    border: 'none',
+    width: '100%',
+    justifyContent: collapsed ? 'center' as const : 'flex-start' as const,
+  };
+}
+
+export default function Layout({
+  children, isAdmin, adminActor, onToggleAdmin,
+  loginOpen, loginError, loginLoading, onAdminLogin, onAdminLoginCancel,
+}: LayoutProps) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const currentView = viewFromPath(location.pathname);
   const [collapsed, setCollapsed] = useState(false);
+  const [password, setPassword] = useState('');
+  const [loginActor, setLoginActor] = useState<AdminActor>('gilles');
+  const [showPassword, setShowPassword] = useState(false);
+  const [health, setHealth] = useState<ApiHealth | null>(null);
+  const [staticMeta, setStaticMeta] = useState<StaticDataMeta | null>(null);
+  const [usingStatic, setUsingStatic] = useState(false);
+
+  useEffect(() => {
+    if (!loginOpen) {
+      setShowPassword(false);
+      setLoginActor('gilles');
+    }
+  }, [loginOpen]);
+
+  useEffect(() => {
+    fetchApiHealth().then(h => {
+      setHealth(h);
+      if (h?.ok) markDataSourceLive();
+    }).catch(() => setHealth(null));
+    fetchStaticDataMeta().then(setStaticMeta).catch(() => setStaticMeta(null));
+    const id = window.setInterval(() => setUsingStatic(getLastDataSource() === 'static'), 3000);
+    setUsingStatic(getLastDataSource() === 'static');
+    return () => window.clearInterval(id);
+  }, [location.pathname]);
 
   return (
     <div style={{ display: 'flex', width: '100%', minHeight: '100vh' }}>
@@ -72,29 +131,14 @@ export default function Layout({ currentView, onNavigate, children, isAdmin, onT
 
         {/* Navigation */}
         <nav style={{ flex: 1, padding: collapsed ? '12px 8px' : '12px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {navItems.map(item => {
+          {mainNavItems.map(item => {
             const Icon = item.icon;
-            const isActive = currentView === item.view;
+            const isActive = isNavActive(location.pathname, item.view);
             return (
               <button
                 key={item.view}
-                onClick={() => onNavigate(item.view)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: collapsed ? '10px 0' : '8px 10px',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  fontWeight: isActive ? 600 : 500,
-                  color: isActive ? 'var(--brand)' : 'var(--text-secondary)',
-                  background: isActive ? 'var(--brand-dim)' : 'transparent',
-                  cursor: 'pointer',
-                  transition: 'background 0.12s ease, color 0.12s ease',
-                  border: 'none',
-                  width: '100%',
-                  justifyContent: collapsed ? 'center' : 'flex-start',
-                }}
+                onClick={() => navigate(item.path)}
+                style={navButtonStyle(collapsed, isActive)}
                 title={item.label}
               >
                 <Icon size={18} strokeWidth={isActive ? 2.5 : 2} />
@@ -102,13 +146,37 @@ export default function Layout({ currentView, onNavigate, children, isAdmin, onT
               </button>
             );
           })}
+          <div style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: collapsed ? 'center' : 'stretch',
+          }}>
+            {(() => {
+              const Icon = historiqueNav.icon;
+              const isActive = isNavActive(location.pathname, historiqueNav.view);
+              return (
+                <button
+                  type="button"
+                  onClick={() => navigate(historiqueNav.path)}
+                  style={navButtonStyle(collapsed, isActive)}
+                  title={historiqueNav.label}
+                >
+                  <Icon size={18} strokeWidth={isActive ? 2.5 : 2} />
+                  {!collapsed && <span>{historiqueNav.label}</span>}
+                </button>
+              );
+            })()}
+          </div>
         </nav>
 
         {/* Admin toggle & collapse */}
         <div style={{ padding: '8px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 4 }}>
           {/* Admin mode button */}
           <button
-            onClick={() => onNavigate('settings')}
+            onClick={() => navigate(routes.settings)}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -154,7 +222,7 @@ export default function Layout({ currentView, onNavigate, children, isAdmin, onT
               {isAdmin ? <Unlock size={14} /> : <Lock size={14} />}
               {!collapsed && (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {isAdmin ? 'Admin ON' : 'Admin OFF'}
+                  {isAdmin ? `Admin — ${adminActor === 'claire' ? 'Claire' : 'Gilles'}` : 'Admin OFF'}
                   {isAdmin && <Pencil size={11} />}
                 </span>
               )}
@@ -177,6 +245,11 @@ export default function Layout({ currentView, onNavigate, children, isAdmin, onT
           >
             {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
           </button>
+          {!collapsed && typeof __APP_BUILD__ !== 'undefined' && (
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', opacity: 0.65, padding: '4px 10px 0', fontFamily: 'var(--font-mono)' }}>
+              build {__APP_BUILD__}
+            </div>
+          )}
         </div>
       </aside>
 
@@ -200,11 +273,149 @@ export default function Layout({ currentView, onNavigate, children, isAdmin, onT
             letterSpacing: '0.05em',
           }}>
             <Pencil size={12} />
-            MODE ADMIN — Les données sont modifiables. Cliquez sur les textes pour les éditer.
+            MODE ADMIN — {adminActor === 'claire' ? 'Claire' : 'Gilles'} — Les écritures sont enregistrées sur le serveur{health?.blob ? ' (Blob actif)' : ' — ⚠ Blob non connecté, risque de perte'}.
+          </div>
+        )}
+        {(health === null || (usingStatic && health?.ok)) && (
+          <div style={{
+            position: 'sticky',
+            top: isAdmin ? 28 : 0,
+            zIndex: 99,
+            background: health === null ? '#fef3c7' : '#fffbeb',
+            borderBottom: `1px solid ${health === null ? '#fcd34d' : '#fde68a'}`,
+            padding: '8px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 11,
+            color: '#92400e',
+          }}>
+            <AlertTriangle size={14} />
+            <span>
+              {health === null
+                ? 'API indisponible — vérifiez que le serveur tourne (npm run dev:api)'
+                : 'Certaines données proviennent du cache statique — resynchronisez pour rafraîchir'}
+              {staticMeta?.exportedAt && health === null && (
+                <> (export : {new Date(staticMeta.exportedAt).toLocaleString('fr-FR')})</>
+              )}
+            </span>
+          </div>
+        )}
+        {isAdmin && health && !health.blob && health.vercel && (
+          <div style={{
+            position: 'sticky',
+            top: (health === null || usingStatic) ? (isAdmin ? 56 : 28) : (isAdmin ? 28 : 0),
+            zIndex: 98,
+            background: '#fee2e2',
+            borderBottom: '1px solid #fca5a5',
+            padding: '8px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 11,
+            color: '#991b1b',
+          }}>
+            <Database size={14} />
+            <span>
+              Persistance prod inactive — Vercel → Storage → connectez le store <strong>alpicois-emails</strong>, puis redéployez.
+            </span>
           </div>
         )}
         {children}
       </main>
+
+      {loginOpen && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(15,23,42,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div style={{
+            width: '100%', maxWidth: 360, background: 'var(--bg-surface)', borderRadius: 14,
+            border: '1px solid var(--border-color)', padding: 24, boxShadow: 'var(--shadow-xl)',
+          }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Mode admin</h2>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
+              Choisissez qui se connecte, puis entrez le mot de passe admin (identique pour Gilles et Claire).
+            </p>
+            <form onSubmit={e => {
+              e.preventDefault();
+              onAdminLogin?.(password, loginActor);
+            }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                {([
+                  { id: 'gilles' as const, label: 'Gilles' },
+                  { id: 'claire' as const, label: 'Claire' },
+                ]).map(a => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => setLoginActor(a.id)}
+                    style={{
+                      flex: 1, padding: '10px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                      border: loginActor === a.id ? '2px solid var(--brand)' : '1px solid var(--border-color)',
+                      background: loginActor === a.id ? 'var(--brand-dim)' : 'var(--bg-body)',
+                      color: loginActor === a.id ? 'var(--brand)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ position: 'relative', marginBottom: 10 }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Mot de passe admin"
+                  autoFocus
+                  style={{
+                    width: '100%', padding: '10px 40px 10px 12px', borderRadius: 8,
+                    border: '1px solid var(--border-color)', fontSize: 13,
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                  style={{
+                    position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                    border: 'none', background: 'transparent', cursor: 'pointer',
+                    color: 'var(--text-muted)', display: 'flex', padding: 4,
+                  }}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              {loginError && (
+                <p style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 10 }}>{loginError}</p>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => { setPassword(''); setShowPassword(false); onAdminLoginCancel?.(); }}
+                  style={{
+                    padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border-color)',
+                    background: 'transparent', cursor: 'pointer', fontSize: 12,
+                  }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={loginLoading || !password}
+                  style={{
+                    padding: '8px 14px', borderRadius: 8, border: 'none',
+                    background: 'var(--brand)', color: 'white', cursor: 'pointer',
+                    fontSize: 12, fontWeight: 600, opacity: loginLoading ? 0.7 : 1,
+                  }}
+                >
+                  {loginLoading ? 'Connexion…' : 'Activer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -21,10 +21,16 @@ const TEMPLATES = [
   { src: "Annexe 2 - Fiche Descriptive du chalet L'Alpicois.docx", dest: 'annexe-fdc.docx', tags: [] },
 ];
 
+function stripHighlightsFromXml(xml) {
+  return xml
+    .replace(/<w:highlight[^/]*\/>/g, '')
+    .replace(/<w:highlight[^>]*>[\s\S]*?<\/w:highlight>/g, '');
+}
+
 function tagXml(xml, tags) {
-  if (!tags.length) return xml;
+  if (!tags.length) return stripHighlightsFromXml(xml);
   let i = 0;
-  return xml.replace(/<w:t>(X+)<\/w:t>/g, (match) => {
+  return stripHighlightsFromXml(xml).replace(/<w:t>(X+)<\/w:t>/g, (match) => {
     if (i >= tags.length) return match;
     const tag = `{${tags[i++]}}`;
     return `<w:t>${tag}</w:t>`;
@@ -34,10 +40,24 @@ function tagXml(xml, tags) {
 function processDocx(srcPath, destPath, tags) {
   const buf = readFileSync(srcPath);
   const zip = new PizZip(buf);
-  const xmlPath = 'word/document.xml';
-  let xml = zip.file(xmlPath).asText();
-  xml = tagXml(xml, tags);
-  zip.file(xmlPath, xml);
+  for (const path of Object.keys(zip.files)) {
+    if (!/^word\/(document|header|footer)\d*\.xml$/.test(path)) continue;
+    const file = zip.file(path);
+    if (!file) continue;
+    zip.file(path, path === 'word/document.xml' ? tagXml(file.asText(), tags) : stripHighlightsFromXml(file.asText()));
+  }
+  writeFileSync(destPath, zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
+}
+
+function copyDocxStripped(srcPath, destPath) {
+  const buf = readFileSync(srcPath);
+  const zip = new PizZip(buf);
+  for (const path of Object.keys(zip.files)) {
+    if (!/^word\/(document|header|footer)\d*\.xml$/.test(path)) continue;
+    const file = zip.file(path);
+    if (!file) continue;
+    zip.file(path, stripHighlightsFromXml(file.asText()));
+  }
   writeFileSync(destPath, zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
 }
 
@@ -45,16 +65,20 @@ mkdirSync(OUT, { recursive: true });
 
 for (const { src, dest, tags } of TEMPLATES) {
   const srcPath = join(SOURCE, src);
+  const destPath = join(OUT, dest);
   if (!existsSync(srcPath)) {
+    if (existsSync(destPath)) {
+      console.log(`✓ Using committed ${dest}`);
+      continue;
+    }
     console.warn(`⚠️  Missing: ${src}`);
     continue;
   }
-  const destPath = join(OUT, dest);
   if (tags.length) {
     processDocx(srcPath, destPath, tags);
     console.log(`✅ Tagged ${dest} (${tags.length} champs)`);
   } else {
-    writeFileSync(destPath, readFileSync(srcPath));
+    copyDocxStripped(srcPath, destPath);
     console.log(`✅ Copied ${dest}`);
   }
 }

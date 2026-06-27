@@ -2,6 +2,9 @@
  * Champs administratifs — préremplissage depuis contact / séjour.
  */
 
+import { displayNameFromContact } from './name-format.js';
+import { estimateWeeklyPrice, estimateStayPrice } from './availability.js';
+
 export const LANDLORD = {
   name: 'Barbier Gilles',
   address1: '7 rue Joanès',
@@ -29,6 +32,18 @@ export const BALANCE_DAYS_BEFORE = 60;
 
 function pad2(n) {
   return String(n).padStart(2, '0');
+}
+
+/** Normalise toute date vers YYYY-MM-DD (formulaires HTML, overrides API). */
+export function normalizeIsoDate(val) {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const fr = s.match(/^(\d{1,2})[/. -]+(\d{1,2})[/. -]+(\d{4})$/);
+  if (fr) return `${fr[3]}-${pad2(fr[2])}-${pad2(fr[1])}`;
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return '';
 }
 
 function parseDateParts(iso) {
@@ -79,27 +94,94 @@ function defaultDocSuffix(contactId) {
   return base.padStart(2, '0').slice(-2);
 }
 
+function stayWeekCount(stay) {
+  const checkIn = stay?.checkIn || stay?.check_in;
+  const checkOut = stay?.checkOut || stay?.check_out;
+  return Math.max(1, Math.round(diffNights(checkIn, checkOut) / 7));
+}
+
+function stayTotalPrice(stay) {
+  return Number(
+    stay?.priceConfirmed || stay?.price_confirmed
+    || stay?.priceQuoted || stay?.price_quoted || 0,
+  );
+}
+
+/** Séjour le plus pertinent (confirmé, payé, ou toute réservation active). */
+function pickBestStay(contact) {
+  const stays = (contact?.stays || []).filter(s =>
+    s.checkIn || s.check_in,
+  ).filter(s => !['cancelled', 'no_show'].includes(s.status));
+
+  const priority = ['paid', 'confirmed', 'pending', 'negotiating'];
+  for (const status of priority) {
+    const s = stays.find(st => st.status === status);
+    if (s) return s;
+  }
+  return stays[0] || null;
+}
+
+function pickStayProgress(contact, checkIn, checkOut) {
+  const rows = contact?.stayProgress || [];
+  return rows.find(p => p.checkIn === checkIn && p.checkOut === checkOut)
+    || rows.find(p => p.checkIn === checkIn)
+    || rows[0]
+    || null;
+}
+
 function pickPrice(contact, overrides) {
   if (overrides.weeklyRent) return Number(overrides.weeklyRent);
+
+  const stay = pickBestStay(contact);
+  if (stay) {
+    const total = stayTotalPrice(stay);
+    if (total > 0) return Math.round(total / stayWeekCount(stay));
+  }
+
+  const bookedWeek = (contact?.requestedWeeks || []).find(w =>
+    ['booked', 'negotiating'].includes(w.status) && (w.price || w.notes),
+  );
+  if (bookedWeek?.price) return Number(bookedWeek.price);
+  if (bookedWeek?.notes?.match(/\d+/)) {
+    const m = bookedWeek.notes.match(/(\d[\d\s]*)\s*€/);
+    if (m) return Number(m[1].replace(/\s/g, ''));
+  }
+
   const profile = contact?.profileJson || {};
   const prices = profile.pricesMentioned || [];
   if (prices.length) return Number(prices[prices.length - 1].amount) || 0;
-  const weeks = contact?.requestedWeeks || [];
-  if (weeks.length && weeks[0].notes?.match(/\d+/)) {
-    const m = weeks[0].notes.match(/(\d[\d\s]*)\s*€/);
-    if (m) return Number(m[1].replace(/\s/g, ''));
+
+  const { checkIn, checkOut } = pickStayDates(contact, overrides);
+  if (checkIn) {
+    const season = seasonLabel(checkIn);
+    const stayTotal = estimateStayPrice(checkIn, checkOut, season);
+    const weeks = Math.max(1, Math.round(diffNights(checkIn, checkOut) / 7));
+    if (stayTotal > 0) return Math.round(stayTotal / weeks);
+    return estimateWeeklyPrice(checkIn, season);
   }
   return 0;
 }
 
 function pickStayDates(contact, overrides) {
   if (overrides.checkIn && overrides.checkOut) {
-    return { checkIn: overrides.checkIn, checkOut: overrides.checkOut };
+    return {
+      checkIn: normalizeIsoDate(overrides.checkIn),
+      checkOut: normalizeIsoDate(overrides.checkOut),
+    };
   }
-  const stay = (contact?.stays || []).find(s => s.status === 'confirmed' || s.status === 'paid');
-  if (stay?.checkIn) return { checkIn: stay.checkIn, checkOut: stay.checkOut };
-  const week = (contact?.requestedWeeks || []).find(w => w.status === 'booked' || w.status === 'negotiating');
-  if (week?.checkIn) return { checkIn: week.checkIn, checkOut: week.checkOut };
+  const stay = pickBestStay(contact);
+  if (stay?.checkIn || stay?.check_in) {
+    return {
+      checkIn: normalizeIsoDate(stay.checkIn || stay.check_in),
+      checkOut: normalizeIsoDate(stay.checkOut || stay.check_out),
+    };
+  }
+  const week = (contact?.requestedWeeks || []).find(w =>
+    w.checkIn && ['booked', 'negotiating', 'asked'].includes(w.status),
+  );
+  if (week?.checkIn) {
+    return { checkIn: normalizeIsoDate(week.checkIn), checkOut: normalizeIsoDate(week.checkOut) };
+  }
   return { checkIn: '', checkOut: '' };
 }
 
@@ -119,38 +201,47 @@ export function buildDocumentFields(contact, overrides = {}) {
   const weeks = Number(overrides.weeks) || Math.max(1, Math.round(nights / 7));
   const weeklyRent = Number(overrides.weeklyRent) || pickPrice(contact, overrides);
   const rentalTotal = Number(overrides.rentalTotal) || weeklyRent * weeks;
+  const progress = pickStayProgress(contact, checkIn, checkOut);
   const taxAdults = Number(overrides.taxAdults ?? adults);
   const taxNights = Number(overrides.taxNights ?? nights);
   const touristTaxTotal = Number(overrides.touristTaxTotal)
     || Math.round(taxAdults * TOURIST_TAX_PER_ADULT_PER_NIGHT * taxNights * 100) / 100;
   const totalDue = Number(overrides.totalDue) || rentalTotal + touristTaxTotal;
-  const deposit30 = Number(overrides.deposit30) || Math.round(rentalTotal * DEPOSIT_RATE * 100) / 100;
-  const balance70 = Number(overrides.balance70) || Math.round((rentalTotal * BALANCE_RATE + touristTaxTotal) * 100) / 100;
+  const deposit30 = Number(overrides.deposit30) || Number(progress?.depositAmount || 0) || Math.round(rentalTotal * DEPOSIT_RATE * 100) / 100;
+  const balance70 = Number(overrides.balance70) || Number(progress?.balanceAmount || 0) || Math.round((rentalTotal * BALANCE_RATE + touristTaxTotal) * 100) / 100;
+  const invoiceKind = overrides.invoiceKind === 'solde' ? 'solde' : 'acompte';
+  const paymentMethod = overrides.paymentMethod === 'carte' ? 'carte bancaire' : 'virement';
 
   const season = seasonLabel(checkIn);
   const suffix = overrides.docSuffix || defaultDocSuffix(contact?.id);
-  const contractNumberFixed = overrides.contractNumber || `ALP ${season.includes('2026') ? '2026/27' : season.replace('-', '/')}-${suffix}`;
+  const contractNumberFixed = overrides.contractNumber || progress?.contractNumber || `ALP ${season.includes('2026') ? '2026/27' : season.replace('-', '/')}-${suffix}`;
 
-  const contractDate = overrides.contractDate || today;
-  const issueDate = overrides.issueDate || today;
-  const depositDueDate = overrides.depositDueDate || contractDate;
-  const balanceDueDate = overrides.balanceDueDate || (checkIn ? addDays(checkIn, -BALANCE_DAYS_BEFORE) : '');
+  const contractDate = normalizeIsoDate(overrides.contractDate) || today;
+  const issueDate = normalizeIsoDate(overrides.issueDate) || today;
+  const depositDueDate = normalizeIsoDate(overrides.depositDueDate) || contractDate;
+  const balanceDueDate = normalizeIsoDate(overrides.balanceDueDate)
+    || (checkIn ? addDays(checkIn, -BALANCE_DAYS_BEFORE) : '');
 
   const ci = parseDateParts(checkIn);
   const co = parseDateParts(checkOut);
   const dd = parseDateParts(depositDueDate);
   const bd = parseDateParts(balanceDueDate);
 
-  const tenantName = overrides.tenantName || contact?.name || '';
+  const tenantName = overrides.tenantName || (contact ? displayNameFromContact(contact) : '');
   const tenantAddress1 = overrides.tenantAddress1 || contact?.address || '';
-  const tenantAddress2 = overrides.tenantAddress2 || [contact?.postalCode, contact?.country !== 'France' ? contact?.country : ''].filter(Boolean).join(' ') || '';
-  const tenantAddress3 = overrides.tenantAddress3 || contact?.country || '';
-  const tenantPostalCity = overrides.tenantPostalCity || [contact?.postalCode, contact?.address?.split(',').pop()?.trim()].filter(Boolean).join(' ') || tenantAddress2;
+  const postalCity = contact?.postalCode || '';
+  const tenantAddress2 = overrides.tenantAddress2 || postalCity || '';
+  const tenantAddress3 = overrides.tenantAddress3 || (contact?.country && contact.country !== 'France' ? contact.country : '');
+  const tenantPostalCity = overrides.tenantPostalCity || postalCity || tenantAddress2;
 
   const fields = {
     contractSuffix: suffix,
     contractDate: fmtFr(contractDate),
     contractNumber: contractNumberFixed,
+    invoiceKind,
+    invoiceTitle: invoiceKind === 'solde' ? 'Facture de solde' : "Facture d'acompte",
+    paymentMethod,
+    paymentMethodLabel: paymentMethod === 'carte bancaire' ? 'Carte bancaire' : 'Virement bancaire',
     invoiceSuffix: suffix,
     issueDate: fmtFr(issueDate),
     tenantName,
@@ -169,6 +260,7 @@ export function buildDocumentFields(contact, overrides = {}) {
     totalDue: totalDue ? totalDue.toLocaleString('fr-FR') : '',
     deposit30: deposit30 ? deposit30.toLocaleString('fr-FR') : '',
     balance70: balance70 ? balance70.toLocaleString('fr-FR') : '',
+    invoiceAmount: (invoiceKind === 'solde' ? balance70 : deposit30).toLocaleString('fr-FR'),
     tenantSignatureName: overrides.tenantSignatureName || tenantName,
     checkInDay: ci.day,
     checkInMonth: ci.month,
@@ -199,6 +291,18 @@ export function buildDocumentFields(contact, overrides = {}) {
   return fields;
 }
 
+/** Dates ISO pour les champs HTML type="date" (preview API). */
+export function getDocumentFormDates(contact, overrides = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const { checkIn, checkOut } = pickStayDates(contact, overrides);
+  const contractDate = normalizeIsoDate(overrides.contractDate) || today;
+  const issueDate = normalizeIsoDate(overrides.issueDate) || today;
+  const depositDueDate = normalizeIsoDate(overrides.depositDueDate) || contractDate;
+  const balanceDueDate = normalizeIsoDate(overrides.balanceDueDate)
+    || (checkIn ? addDays(checkIn, -BALANCE_DAYS_BEFORE) : '');
+  return { contractDate, issueDate, depositDueDate, balanceDueDate, checkIn, checkOut };
+}
+
 export const CONTRACT_TAG_ORDER = [
   'contractSuffix', 'contractDate', 'tenantName', 'tenantAddress1', 'tenantAddress2', 'tenantAddress3',
   'tenantPhone', 'tenantEmail', 'adults', 'children', 'weeklyRent', 'taxAdults', 'touristTaxTotal',
@@ -207,6 +311,7 @@ export const CONTRACT_TAG_ORDER = [
 
 export const INVOICE_TAG_ORDER = [
   'invoiceSuffix', 'issueDate', 'contractNumber', 'tenantName', 'tenantAddress1', 'tenantAddress2', 'tenantPostalCity',
+  'invoiceTitle', 'paymentMethodLabel', 'invoiceAmount',
   'checkInDay', 'checkInMonth', 'checkInYear', 'checkOutDay', 'checkOutMonth', 'checkOutYear',
   'weeks', 'persons', 'weeklyPrice', 'weeks', 'rentalTotal', 'touristTaxTotal',
   'taxAdults', 'taxNights', 'totalDue', 'deposit30', 'depositDueDay', 'depositDueMonth', 'depositDueYear',

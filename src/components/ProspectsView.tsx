@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Search, Users, CalendarDays, ChevronRight, AlertCircle } from 'lucide-react';
 import { fetchContacts } from '../data';
+import { displayContactName } from '../lib/formatName';
 import type { Contact } from '../types';
 
 type ProspectFilter = 'all' | 'asked' | 'negotiating' | 'abandoned';
@@ -12,7 +13,7 @@ export default function ProspectsView() {
   const [filter, setFilter] = useState<ProspectFilter>('all');
 
   useEffect(() => {
-    fetchContacts().then(setContacts);
+    fetchContacts().then(setContacts).catch(() => setContacts([]));
   }, []);
 
   const prospects = useMemo(() => {
@@ -38,7 +39,7 @@ export default function ProspectsView() {
 
   const filterLabels: Record<ProspectFilter, string> = {
     all: 'Tous',
-    asked: 'Demandé',
+    asked: 'En négociation',
     negotiating: 'En négociation',
     abandoned: 'Abandonné',
   };
@@ -110,7 +111,7 @@ export default function ProspectsView() {
                   <Users size={16} color="#d97706" />
                 </div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{contact.name}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{displayContactName(contact)}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{contact.email}</div>
                 </div>
               </div>
@@ -124,13 +125,12 @@ export default function ProspectsView() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {contact.requestedWeeks.map(rw => {
                 const reqStatusLabel =
-                  rw.status === 'asked' ? 'Demandé' :
+                  rw.status === 'asked' ? 'En négociation' :
                   rw.status === 'negotiating' ? 'En négociation' :
                   rw.status === 'abandoned' ? 'Abandonné' : 'Réservé';
                 const reqColor =
                   rw.status === 'booked' ? '#16a34a' :
-                  rw.status === 'negotiating' ? '#d97706' :
-                  rw.status === 'asked' ? '#2563eb' : '#94a3b8';
+                  rw.status === 'negotiating' || rw.status === 'asked' ? '#d97706' : '#94a3b8';
 
                 return (
                   <div key={rw.id} style={{

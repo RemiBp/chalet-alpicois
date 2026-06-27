@@ -45,6 +45,7 @@ export interface StayRecord {
 export interface Contact {
   id: string;
   name: string;
+  displayName?: string;
   firstName: string;
   email: string;
   alternateEmails: string[];
@@ -62,9 +63,12 @@ export interface Contact {
   stays: StayRecord[];
   totalStays: number;
   requestedWeeks: RequestedWeek[];
+  stayProgress?: StayProgress[];
+  requestedWeekCount?: number;
   notes: string;
   createdAt: string;
   updatedAt: string;
+  isPersonal?: boolean;
   messageCount?: number;
   lastSubject?: string;
   profileJson?: ContactProfileData;
@@ -93,6 +97,11 @@ export interface RequestedWeek {
   children: number;
   status: 'asked' | 'negotiating' | 'abandoned' | 'booked';
   notes: string;
+  availability?: 'available' | 'unavailable' | 'unknown';
+  availabilityLabel?: string;
+  suggestedPrice?: number;
+  alternatives?: AlternativeWeek[];
+  extractedFromEmail?: boolean;
 }
 
 export interface ContactInteraction {
@@ -182,11 +191,39 @@ export interface DocumentFormOverrides {
   totalDue?: number;
   deposit30?: number;
   balance70?: number;
+  invoiceKind?: 'acompte' | 'solde';
+  paymentMethod?: 'virement' | 'carte';
   depositDueDate?: string;
   balanceDueDate?: string;
   tenantSignatureName?: string;
 }
 
-export type DocumentGenerateType = 'facture' | 'contrat' | 'pack';
+export interface StayProgress {
+  id?: string;
+  contactId: string;
+  checkIn: string;
+  checkOut: string;
+  weekPrice?: number;
+  contractNumber: string;
+  contractSigned: boolean;
+  depositInvoiceNumber: string;
+  depositAmount: number;
+  depositPaymentMethod?: string;
+  depositPaid: boolean;
+  balanceInvoiceNumber?: string;
+  balanceAmount?: number;
+  balancePaymentMethod?: string;
+  balancePaid?: boolean;
+  insuranceReceived: boolean;
+  idReceived?: boolean;
+  depositGuaranteePaid?: boolean;
+  depositGuaranteeReturned?: boolean;
+  mailSteps?: Record<string, string>;
+  complete?: boolean;
+  filledCount?: number;
+  requiredCount?: number;
+}
 
-export type ViewType = 'dashboard' | 'calendar' | 'clients' | 'invoices' | 'contracts' | 'settings';
+export type DocumentGenerateType = 'facture' | 'facture_acompte' | 'facture_solde' | 'contrat' | 'pack';
+
+export type ViewType = 'dashboard' | 'calendar' | 'clients' | 'documents' | 'finance' | 'historique' | 'settings';

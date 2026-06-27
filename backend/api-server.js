@@ -1,42 +1,480 @@
 import express from 'express';
-import Database from 'better-sqlite3';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { existsSync } from 'fs';
 import cors from 'cors';
+import 'dotenv/config';
+import { ensureDb, persistDb, persistDbDetailed, requirePersistDb, reloadDbFromBlob } from './database.js';
+import {
+  createAdminToken,
+  verifyAdminToken,
+  decodeAdminToken,
+  checkAdminPassword,
+  isAdminConfigured,
+} from './admin-auth.js';
 import {
   previewDocumentFields,
+  generateContractPdf,
   generateContractDocx,
+  generateInvoicePdf,
   generateInvoiceDocx,
   generateContractPackZip,
 } from './generate-documents.js';
+import { buildDocumentFilename } from './document-filenames.js';
+import { LANDLORD } from './document-fields.js';
+import { saveDraftToMailbox } from './mail-draft.js';
+import {
+  listMailTemplates,
+  saveMailTemplateOverride,
+  resetMailTemplateOverride,
+  getContactMailTracking,
+  upsertContactMailTracking,
+  renderMailTemplateForContact,
+} from './mail-templates.js';
+import { buildDocumentDraftPayload, pickThreadReply, listContactThreadCandidates } from './document-email.js';
+import { extractInquiryFromEmails, computeSeason } from './extract-inquiry.js';
+import { enrichWeekWithAvailability, estimateWeeklyPrice } from './availability.js';
+import { buildInquiryDraftPayload, buildInquiryPreview } from './inquiry-email.js';
+import { runRefreshPipeline } from './refresh-pipeline.js';
+import { refreshBookingStatuses, detectSignalFromEmail } from './detect-booking-signals.js';
+import { getCalendarEvents } from './calendar-events.js';
+import { reconcileBookingsWithAi } from './ai-booking-verify.js';
+import { isDeepSeekConfigured } from './deepseek-client.js';
+import { displayNameFromContact } from './name-format.js';
+import { confirmRequestedWeek, updateRequestedWeekStatus, assignWeekToContact, removeCalendarBooking, updateCalendarEvent } from './week-booking.js';
+import { parseStayEventId, parseWeekEventId } from './finance.js';
+import { ensurePersonalContact } from './host-filter.js';
+import { cleanStoredBodyText } from './email-body.js';
+import { getFinanceSummary } from './finance.js';
+import { isInternalEmail } from './host-filter.js';
+import { mergeContacts } from './merge-contacts.js';
+import { applyExtractedProfile } from './extract-profile.js';
+import { listAuditLog, appendAudit } from './audit-log.js';
+import { resolveSyncProposals, countPendingProposals } from './sync-proposals.js';
+import { getDataDoubts } from './doubts.js';
+import { listStayProgressForContact, upsertStayProgress } from './stay-progress.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const PORT = process.env.API_PORT || 3001;
 
-function resolveDbPath() {
-  for (const p of [join(process.cwd(), 'emails.db'), join(__dirname, '..', 'emails.db')]) {
-    if (existsSync(p)) return p;
-  }
-  return join(process.cwd(), 'emails.db');
+function adminTokenFromReq(req) {
+  return (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
 }
 
-const DB_PATH = resolveDbPath();
-const PORT = process.env.API_PORT || 3001;
+function adminActorFromReq(req) {
+  return decodeAdminToken(adminTokenFromReq(req))?.actor || 'gilles';
+}
+
+async function ensureFreshDb() {
+  if (process.env.VERCEL === '1') {
+    db = await reloadDbFromBlob();
+  }
+  return db;
+}
+
+function contactFromRow(row) {
+  if (!row) return null;
+  const contact = toCamel(row);
+  try { contact.alternatePhones = JSON.parse(row.alternate_phones || '[]'); } catch { contact.alternatePhones = []; }
+  try { contact.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { contact.alternateEmails = []; }
+  try { contact.profileJson = JSON.parse(row.profile_json || '{}'); } catch { contact.profileJson = {}; }
+  contact.enrichedAt = row.enriched_at || '';
+  contact.isPersonal = row.is_personal === 1;
+  return formatContactResponse(contact);
+}
+
+function auditCtxFromReq(req) {
+  const actor = adminActorFromReq(req);
+  return { source: actor, actor };
+}
+
+async function recordAudit(req, entry) {
+  appendAudit(db, {
+    actor: adminActorFromReq(req),
+    ...entry,
+  });
+  await requirePersistDb();
+}
+
+async function persistAfterWrite() {
+  await requirePersistDb();
+}
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
-let db;
-try {
-  db = new Database(DB_PATH, { readonly: process.env.VERCEL === '1' });
-  db.pragma('journal_mode = WAL');
-  console.log(`Connected to SQLite DB: ${DB_PATH}`);
-} catch (err) {
-  console.error(`Failed to open database at ${DB_PATH}:`, err.message);
-  if (process.env.VERCEL !== '1') process.exit(1);
+/** @type {import('better-sqlite3').Database | null} */
+let db = null;
+
+app.use('/api', async (req, res, next) => {
+  try {
+    db = await ensureDb();
+    next();
+  } catch (err) {
+    console.error('DB init error:', err);
+    res.status(503).json({ error: 'Base de données indisponible', details: err.message });
+  }
+});
+
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
+  if (req.path === '/admin/login') return next();
+  if (req.path === '/documents/preview') return next();
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!verifyAdminToken(token)) {
+    return res.status(401).json({ error: 'Mode admin requis — connectez-vous avec le mot de passe admin' });
+  }
+  next();
+});
+
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
+  if (req.path === '/admin/login') return next();
+  res.on('finish', () => {
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      persistDb().catch(err => console.error('persistDb:', err.message));
+    }
+  });
+  next();
+});
+
+// ─── ADMIN ────────────────────────────────────────
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: Boolean(db),
+    apiVersion: '2026-06-15-mail-suivi-v2',
+    adminConfigured: isAdminConfigured(),
+    blob: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
+    cronConfigured: Boolean(process.env.CRON_SECRET),
+    imapConfigured: Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS),
+    vercel: process.env.VERCEL === '1',
+    blobKey: 'alpicois-emails.db',
+    blobAccess: process.env.BLOB_STORE_ACCESS === 'private' ? 'private' : 'public',
+    deepseek: isDeepSeekConfigured(),
+    aiReconcileDryRun: process.env.AI_RECONCILE_DRY_RUN === '1',
+  });
+});
+
+app.get('/api/coherence/report', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { getFinanceSummary } = await import('./finance.js');
+    const finance = getFinanceSummary(db, req.query.season || '2026-2027');
+    const estimated = finance.lines.filter(l => l.estimatedAmount && !l.personal);
+    const multiWeek = finance.lines.filter(l => (l.weekCount || 1) > 1);
+    let aiPreview = null;
+    if (isDeepSeekConfigured()) {
+      aiPreview = await reconcileBookingsWithAi(db, {
+        limit: parseInt(req.query.aiLimit || '10', 10),
+        dryRun: true,
+      });
+    }
+    res.json({
+      finance: {
+        season: finance.season,
+        collected: finance.collected,
+        confirmedPending: finance.confirmedPending,
+        forecast: finance.forecast,
+        bookedWeeks: finance.bookedWeeks,
+        occupancyRate: finance.occupancyRate,
+      },
+      estimatedLines: estimated.length,
+      multiWeekLines: multiWeek.map(l => ({
+        contactName: l.contactName, checkIn: l.checkIn, checkOut: l.checkOut, amount: l.amount, weekCount: l.weekCount,
+      })),
+      aiReconcile: aiPreview,
+      blobConfigured: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/persist-db', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const result = await persistDbDetailed();
+    res.json({
+      ok: result.ok,
+      blob: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
+      vercel: process.env.VERCEL === '1',
+      size: result.size,
+      reason: result.reason,
+      error: result.error,
+      message: result.ok ? 'Base persistée sur Blob' : (result.error || result.reason || 'Échec persistance'),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/reconcile-ai', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  if (!isDeepSeekConfigured()) {
+    return res.status(503).json({ error: 'DEEPSEEK_API_KEY non configuré sur le serveur' });
+  }
+  try {
+    const dryRun = req.body?.dryRun !== false && req.query.dryRun !== '0';
+    const report = await reconcileBookingsWithAi(db, {
+      limit: parseInt(req.body?.limit || req.query.limit || '20', 10),
+      dryRun,
+    });
+    if (!dryRun && process.env.VERCEL === '1') await persistDb();
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/doubts', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const season = req.query.season || '2026-2027';
+    res.json(await getDataDoubts(db, season));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/audit', async (req, res) => {
+  if (!verifyAdminToken(adminTokenFromReq(req))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    if (process.env.VERCEL === '1') {
+      db = await reloadDbFromBlob();
+    }
+    const limit = parseInt(req.query.limit || '100', 10);
+    const source = req.query.source;
+    const pendingOnly = req.query.pending === '1';
+    const entries = listAuditLog(db, { limit, source, pendingOnly });
+    res.json({ entries, pendingCount: countPendingProposals(db) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/audit/resolve', async (req, res) => {
+  if (!verifyAdminToken(adminTokenFromReq(req))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const decisions = req.body?.decisions;
+    if (!Array.isArray(decisions) || decisions.length === 0) {
+      return res.status(400).json({ error: 'decisions[] requis' });
+    }
+    const results = resolveSyncProposals(db, decisions, adminActorFromReq(req));
+    if (process.env.VERCEL === '1') await persistDb().catch(() => {});
+    res.json({ ok: true, results, pendingCount: countPendingProposals(db) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/login', (req, res) => {
+  if (!isAdminConfigured()) {
+    return res.status(503).json({ error: 'ADMIN_PASSWORD non configuré sur le serveur' });
+  }
+  const { password, actor = 'gilles' } = req.body || {};
+  if (!checkAdminPassword(password)) {
+    return res.status(401).json({ error: 'Mot de passe incorrect' });
+  }
+  const safeActor = actor === 'claire' ? 'claire' : 'gilles';
+  res.json({ token: createAdminToken(safeActor), expiresIn: '7d', actor: safeActor });
+});
+
+app.get('/api/admin/status', (req, res) => {
+  const token = adminTokenFromReq(req);
+  const decoded = decodeAdminToken(token);
+  res.json({
+    authenticated: Boolean(decoded),
+    adminConfigured: isAdminConfigured(),
+    actor: decoded?.actor || null,
+  });
+});
+
+// ─── CRON / REFRESH ───────────────────────────────
+
+function verifyCronAuth(req) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return process.env.VERCEL !== '1';
+  const header = req.headers.authorization || '';
+  const bearer = header.replace(/^Bearer\s+/i, '');
+  const query = req.query?.secret;
+  return bearer === secret || query === secret;
 }
+
+app.get('/api/cron/refresh', async (req, res) => {
+  if (!verifyCronAuth(req)) {
+    return res.status(401).json({ error: 'CRON_SECRET requis' });
+  }
+  try {
+    const report = await runRefreshPipeline(db, { skipImap: req.query?.skipImap === '1' });
+    appendAudit(db, {
+      action: 'data_refresh',
+      entityType: 'pipeline',
+      entityId: 'refresh',
+      payload: {
+        mails: report.imap?.totalSynced ?? 0,
+        profiles: report.profiles?.filledCoords ?? 0,
+        signals: report.signals?.recordsUpdated ?? 0,
+        proposals: report.proposals?.proposalsCreated ?? 0,
+        source: 'cron',
+      },
+      actor: 'automatic',
+    });
+    await persistDb();
+    res.json({ ...report, pendingCount: countPendingProposals(db) });
+  } catch (err) {
+    console.error('Cron refresh:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/cron/refresh', async (req, res) => {
+  if (!verifyCronAuth(req) && !verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'CRON_SECRET ou admin requis' });
+  }
+  try {
+    const report = await runRefreshPipeline(db, { skipImap: req.body?.skipImap === true });
+    await persistDb();
+    const actor = verifyAdminToken(adminTokenFromReq(req)) ? adminActorFromReq(req) : 'automatic';
+    appendAudit(db, {
+      action: 'data_refresh',
+      entityType: 'pipeline',
+      entityId: 'refresh',
+      payload: {
+        mails: report.imap?.totalSynced ?? 0,
+        profiles: report.profiles?.filledCoords ?? 0,
+        signals: report.signals?.recordsUpdated ?? 0,
+        proposals: report.proposals?.proposalsCreated ?? 0,
+      },
+      actor: actor === 'automatic' ? 'automatic' : actor,
+    });
+    if (process.env.VERCEL === '1') await persistDb().catch(() => {});
+    res.json({ ...report, pendingCount: countPendingProposals(db) });
+  } catch (err) {
+    console.error('Refresh:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── CALENDAR & SIGNALS ───────────────────────────
+
+let lastCalendarRefreshAt = 0;
+
+app.get('/api/calendar', async (req, res) => {
+  try {
+    const force = req.query.refresh === '1';
+    if (force) {
+      const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!verifyCronAuth(req) && !verifyAdminToken(token)) {
+        return res.status(401).json({ error: 'refresh=1 requiert auth admin ou CRON_SECRET' });
+      }
+      refreshBookingStatuses(db, { sinceDays: 120, limit: 800 });
+      lastCalendarRefreshAt = Date.now();
+      if (process.env.VERCEL === '1') {
+        await persistDb().catch(err => console.error('calendar persistDb:', err.message));
+      }
+    }
+    const season = req.query.season || '2026-2027';
+    res.json(getCalendarEvents(db, season));
+  } catch (err) {
+    console.error('GET /api/calendar:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/finance', (req, res) => {
+  try {
+    const season = req.query.season || '2026-2027';
+    res.json(getFinanceSummary(db, season));
+  } catch (err) {
+    console.error('GET /api/finance:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/emails/recent', (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '25', 10), 50);
+    const rows = db.prepare(`
+      SELECT e.*, c.name AS contact_name, c.email AS contact_email
+      FROM emails e
+      LEFT JOIN contacts c ON c.id = e.contact_id
+      WHERE (e.mailbox = 'INBOX' OR e.mailbox LIKE 'INBOX.%')
+        AND e.sender NOT LIKE '%alpicois-laplagne.fr%'
+      ORDER BY e.date DESC
+      LIMIT ?
+    `).all(limit);
+
+    res.json(rows.map(r => ({
+      ...toCamel(r),
+      id: String(r.id),
+      folder: r.mailbox,
+      isFromGuest: true,
+      threadId: r.message_id,
+      contactId: r.contact_id,
+      contactName: r.contact_name
+        ? displayNameFromContact({ name: r.contact_name, email: r.contact_email })
+        : (r.sender_name || r.sender || ''),
+    })));
+  } catch (err) {
+    console.error('GET /api/emails/recent:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/signals/recent', (req, res) => {
+  try {
+    const sinceDays = parseInt(req.query.days || '45', 10);
+    const limit = parseInt(req.query.limit || '15', 10);
+    const since = new Date();
+    since.setDate(since.getDate() - sinceDays);
+
+    const emails = db.prepare(`
+      SELECT e.id, e.subject, e.body_text, e.date, e.mailbox, e.contact_id, c.name AS contact_name, c.email AS contact_email
+      FROM emails e
+      JOIN contacts c ON c.id = e.contact_id
+      WHERE e.contact_id IS NOT NULL AND e.date >= ?
+      ORDER BY e.date DESC
+      LIMIT 300
+    `).all(since.toISOString());
+
+    const seen = new Set();
+    const signals = [];
+
+    for (const email of emails) {
+      if (seen.has(email.contact_id)) continue;
+      const signal = detectSignalFromEmail(email.subject, email.body_text, email.mailbox);
+      if (!signal) continue;
+      seen.add(email.contact_id);
+      signals.push({
+        contactId: email.contact_id,
+        contactName: displayNameFromContact({ name: email.contact_name, email: email.contact_email }),
+        contactEmail: email.contact_email,
+        label: signal.label,
+        type: signal.type,
+        strength: signal.strength,
+        confidence: signal.strength >= 90 ? 'high' : signal.strength >= 70 ? 'medium' : 'low',
+        emailDate: email.date,
+        subject: email.subject,
+      });
+      if (signals.length >= limit) break;
+    }
+
+    res.json({ sinceDays, signals });
+  } catch (err) {
+    console.error('GET /api/signals/recent:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── HELPERS ──────────────────────────────────────
 
@@ -50,6 +488,11 @@ function toCamel(row) {
   return out;
 }
 
+function formatContactResponse(contact) {
+  if (!contact) return contact;
+  return { ...contact, displayName: displayNameFromContact(contact) };
+}
+
 function nullableInt(val) {
   return val === null || val === undefined ? null : Number(val);
 }
@@ -57,22 +500,28 @@ function nullableInt(val) {
 // ─── GET /api/stats ───────────────────────────────
 
 app.get('/api/stats', (req, res) => {
-  const totalContacts = db.prepare('SELECT COUNT(*) as c FROM contacts').get().c;
-  const totalEmails = db.prepare('SELECT COUNT(*) as c FROM emails WHERE contact_id IS NOT NULL').get().c;
-  const monthStart = new Date().toISOString().slice(0, 7) + '-01';
-  const emailsThisMonth = db.prepare(
-    "SELECT COUNT(*) as c FROM emails WHERE mailbox = 'INBOX' AND date >= ?"
-  ).get(monthStart).c;
-  const recentContacts = db.prepare(
-    "SELECT COUNT(*) as c FROM contacts WHERE last_contact_date >= ?"
-  ).get(monthStart).c;
+  try {
+    if (!db) return res.status(503).json({ error: 'Base de données indisponible' });
+    const totalContacts = db.prepare('SELECT COUNT(*) as c FROM contacts').get().c;
+    const totalEmails = db.prepare('SELECT COUNT(*) as c FROM emails WHERE contact_id IS NOT NULL').get().c;
+    const monthStart = new Date().toISOString().slice(0, 7) + '-01';
+    const emailsThisMonth = db.prepare(
+      "SELECT COUNT(*) as c FROM emails WHERE mailbox = 'INBOX' AND date >= ?"
+    ).get(monthStart).c;
+    const recentContacts = db.prepare(
+      "SELECT COUNT(*) as c FROM contacts WHERE last_contact_date >= ?"
+    ).get(monthStart).c;
 
-  res.json({
-    totalContacts,
-    totalEmails,
-    emailsThisMonth,
-    recentContacts,
-  });
+    res.json({
+      totalContacts,
+      totalEmails,
+      emailsThisMonth,
+      recentContacts,
+    });
+  } catch (err) {
+    console.error('GET /api/stats:', err.message);
+    res.status(500).json({ error: 'Erreur stats', details: err.message });
+  }
 });
 
 // ─── GET /api/chalet ──────────────────────────────
@@ -121,71 +570,124 @@ app.get('/api/chalet', (_req, res) => {
 // ─── GET /api/emails ──────────────────────────────
 
 app.get('/api/emails', (req, res) => {
-  const { contactId, threadId } = req.query;
-  let rows;
-  if (contactId) {
-    rows = db.prepare('SELECT * FROM emails WHERE contact_id = ? ORDER BY date ASC').all(contactId);
-  } else if (threadId) {
-    rows = db.prepare('SELECT * FROM emails WHERE message_id = ? OR subject LIKE ? ORDER BY date ASC').all(threadId, `%${threadId}%`);
-  } else {
-    rows = db.prepare('SELECT * FROM emails ORDER BY date DESC').all();
+  try {
+    const { contactId, threadId } = req.query;
+    let rows;
+    if (contactId) {
+      rows = db.prepare('SELECT * FROM emails WHERE contact_id = ? ORDER BY date ASC').all(contactId);
+    } else if (threadId) {
+      rows = db.prepare('SELECT * FROM emails WHERE message_id = ? OR subject LIKE ? ORDER BY date ASC').all(threadId, `%${threadId}%`);
+    } else {
+      rows = db.prepare('SELECT * FROM emails ORDER BY date DESC').all();
+    }
+    res.json(rows.map(r => ({
+      ...toCamel(r),
+      id: String(r.id),
+      folder: r.mailbox,
+      isFromGuest: !r.sender?.includes('alpicois-laplagne.fr'),
+      threadId: r.message_id,
+      contactId: r.contact_id,
+    })));
+  } catch (err) {
+    console.error('GET /api/emails:', err.message);
+    res.status(500).json({ error: err.message });
   }
-  res.json(rows.map(r => ({
-    ...toCamel(r),
-    id: String(r.id),
-    folder: r.mailbox,
-    isFromGuest: !r.sender?.includes('alpicois-laplagne.fr'),
-    threadId: r.message_id,
-    contactId: r.contact_id,
-  })));
 });
 
 // ─── GET /api/contacts ────────────────────────────
 
 app.get('/api/contacts', (req, res) => {
-  const contactRows = db.prepare(`
-    SELECT c.*,
-      (SELECT COUNT(*) FROM emails e WHERE e.contact_id = c.id) AS message_count,
-      (SELECT subject FROM emails e WHERE e.contact_id = c.id ORDER BY date DESC LIMIT 1) AS last_subject
-    FROM contacts c
-    ORDER BY c.last_contact_date DESC
-  `).all();
+  try {
+    if (!db) return res.status(503).json({ error: 'Base de données indisponible' });
+    const lite = req.query.lite !== '0';
 
-  const contacts = contactRows.map(c => {
-    const camel = toCamel(c);
-    try { camel.alternatePhones = JSON.parse(c.alternate_phones || '[]'); } catch { camel.alternatePhones = []; }
-    try { camel.alternateEmails = JSON.parse(c.alternate_emails || '[]'); } catch { camel.alternateEmails = []; }
-    camel.stays = [];
-    camel.requestedWeeks = [];
-    camel.totalStays = 0;
-    camel.messageCount = c.message_count || 0;
-    camel.lastSubject = c.last_subject || '';
-    camel.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC LIMIT 3').all(c.id).map(toCamel);
-    try { camel.profileJson = JSON.parse(c.profile_json || '{}'); } catch { camel.profileJson = {}; }
-    camel.enrichedAt = c.enriched_at || '';
-    return camel;
-  });
+    const contactRows = db.prepare(`
+      WITH email_stats AS (
+        SELECT contact_id, COUNT(*) AS message_count, MAX(date) AS last_date
+        FROM emails
+        WHERE contact_id IS NOT NULL
+        GROUP BY contact_id
+      ),
+      last_emails AS (
+        SELECT e.contact_id, e.subject AS last_subject
+        FROM emails e
+        INNER JOIN email_stats es ON es.contact_id = e.contact_id AND e.date = es.last_date
+        GROUP BY e.contact_id
+      ),
+      week_counts AS (
+        SELECT contact_id, COUNT(*) AS requested_week_count
+        FROM requested_weeks
+        GROUP BY contact_id
+      )
+      SELECT c.*,
+        COALESCE(es.message_count, 0) AS message_count,
+        le.last_subject,
+        COALESCE(wc.requested_week_count, 0) AS requested_week_count
+      FROM contacts c
+      LEFT JOIN email_stats es ON es.contact_id = c.id
+      LEFT JOIN last_emails le ON le.contact_id = c.id
+      LEFT JOIN week_counts wc ON wc.contact_id = c.id
+      ORDER BY c.last_contact_date DESC
+    `).all();
 
-  res.json(contacts);
+    const weekStmt = db.prepare(
+      'SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC LIMIT 6',
+    );
+    const stayStmt = db.prepare(
+      'SELECT * FROM stays WHERE contact_id = ? ORDER BY check_in DESC LIMIT 6',
+    );
+
+    const contacts = contactRows.map(c => {
+      const camel = toCamel(c);
+      try { camel.alternatePhones = JSON.parse(c.alternate_phones || '[]'); } catch { camel.alternatePhones = []; }
+      try { camel.alternateEmails = JSON.parse(c.alternate_emails || '[]'); } catch { camel.alternateEmails = []; }
+      camel.stays = lite ? stayStmt.all(c.id).map(toCamel) : [];
+      camel.totalStays = 0;
+      camel.messageCount = c.message_count || 0;
+      camel.lastSubject = c.last_subject || '';
+      camel.requestedWeekCount = c.requested_week_count || 0;
+      if (lite) {
+        camel.requestedWeeks = weekStmt.all(c.id).map(toCamel);
+        camel.profileJson = {};
+      } else {
+        camel.requestedWeeks = weekStmt.all(c.id).map(toCamel);
+        camel.stays = stayStmt.all(c.id).map(toCamel);
+        try { camel.profileJson = JSON.parse(c.profile_json || '{}'); } catch { camel.profileJson = {}; }
+      }
+      camel.enrichedAt = c.enriched_at || '';
+      return formatContactResponse(camel);
+    });
+
+    if (lite) {
+      res.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+    }
+    res.json(contacts);
+  } catch (err) {
+    console.error('GET /api/contacts:', err.message);
+    res.status(500).json({ error: 'Erreur contacts', details: err.message });
+  }
 });
 
 // ─── GET /api/contacts/:id ────────────────────────
 
-app.get('/api/contacts/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(req.params.id);
-  if (!row) return res.status(404).json({ error: 'Contact not found' });
+app.get('/api/contacts/:id', async (req, res) => {
+  try {
+    await ensureFreshDb();
+    const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Contact not found' });
 
-  const contact = toCamel(row);
-  try { contact.alternatePhones = JSON.parse(row.alternate_phones || '[]'); } catch { contact.alternatePhones = []; }
-  try { contact.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { contact.alternateEmails = []; }
-  contact.stays = [];
-  contact.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC').all(req.params.id).map(toCamel);
-  contact.totalStays = 0;
-  contact.messageCount = db.prepare('SELECT COUNT(*) as c FROM emails WHERE contact_id = ?').get(req.params.id).c;
-  try { contact.profileJson = JSON.parse(row.profile_json || '{}'); } catch { contact.profileJson = {}; }
-  contact.enrichedAt = row.enriched_at || '';
+    const contact = contactFromRow(row);
+    contact.stays = db.prepare('SELECT * FROM stays WHERE contact_id = ? ORDER BY check_in DESC').all(req.params.id).map(toCamel);
+    contact.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC').all(req.params.id).map(toCamel);
+    contact.stayProgress = listStayProgressForContact(db, req.params.id);
+    contact.totalStays = db.prepare("SELECT COUNT(*) as c FROM stays WHERE contact_id = ? AND status IN ('confirmed','paid')").get(req.params.id).c;
+    contact.messageCount = db.prepare('SELECT COUNT(*) as c FROM emails WHERE contact_id = ?').get(req.params.id).c;
 
-  res.json(contact);
+    res.set('Cache-Control', 'no-store');
+    res.json(contact);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── GET /api/contacts/:id/emails ─────────────────
@@ -202,12 +704,43 @@ app.get('/api/contacts/:id/emails', (req, res) => {
   })));
 });
 
+app.put('/api/contacts/:id/stay-progress', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { checkIn, checkOut, patch = {} } = req.body || {};
+    if (!checkIn || !checkOut) return res.status(400).json({ error: 'checkIn/checkOut requis' });
+    const row = db.prepare('SELECT id FROM contacts WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Contact introuvable' });
+    const progress = upsertStayProgress(db, req.params.id, checkIn, checkOut, patch);
+    await recordAudit(req, {
+      action: 'stay_progress_updated',
+      entityType: 'stay_progress',
+      entityId: `${req.params.id}:${checkIn}`,
+      contactId: req.params.id,
+      payload: { checkIn, checkOut, patch },
+    });
+    res.json({ ok: true, progress });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── POST /api/contacts ────────────────────────────
 
 app.post('/api/contacts', (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const now = new Date().toISOString();
   const b = req.body;
+  if (isInternalEmail(b.email || '')) {
+    return res.status(400).json({
+      error: 'Adresse interne — utilisez le profil « Barbier et amis » pour les semaines personnelles.',
+    });
+  }
   db.prepare(`
     INSERT INTO contacts (id, name, first_name, email, alternate_emails, phone, alternate_phones, origin, origin_detail,
       status, nationality, address, postal_code, country, notes, first_contact_date, last_contact_date, created_at, updated_at)
@@ -240,56 +773,421 @@ app.post('/api/contacts', (req, res) => {
   res.json(camel);
 });
 
+app.post('/api/contacts/:id/merge', (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const sourceId = req.params.id;
+    const targetId = req.body?.targetId;
+    if (!targetId) {
+      return res.status(400).json({ error: 'targetId requis (profil à conserver)' });
+    }
+    const result = mergeContacts(db, targetId, sourceId);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    if (process.env.VERCEL === '1') persistDb().catch(() => {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/:id/extract-profile', (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const result = applyExtractedProfile(db, req.params.id);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    if (process.env.VERCEL === '1') persistDb().catch(() => {});
+    const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(req.params.id);
+    const camel = toCamel(row);
+    try { camel.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { camel.alternateEmails = []; }
+    try { camel.alternatePhones = JSON.parse(row.alternate_phones || '[]'); } catch { camel.alternatePhones = []; }
+    try { camel.profileJson = JSON.parse(row.profile_json || '{}'); } catch { camel.profileJson = {}; }
+    res.json({ ...result, contact: formatContactResponse(camel) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── PUT /api/contacts/:id ─────────────────────────
 
-app.put('/api/contacts/:id', (req, res) => {
-  const { id } = req.params;
-  const existing = db.prepare('SELECT * FROM contacts WHERE id = ?').get(id);
-  if (!existing) return res.status(404).json({ error: 'Contact not found' });
+app.put('/api/contacts/:id', async (req, res) => {
+  try {
+    await ensureFreshDb();
+    const { id } = req.params;
+    const existing = db.prepare('SELECT * FROM contacts WHERE id = ?').get(id);
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
 
-  const fieldMap = {
-    name: 'name', firstName: 'first_name', first_name: 'first_name',
-    email: 'email', phone: 'phone',
-    origin: 'origin', originDetail: 'origin_detail', origin_detail: 'origin_detail',
-    status: 'status', nationality: 'nationality',
-    address: 'address', postalCode: 'postal_code', postal_code: 'postal_code',
-    country: 'country', notes: 'notes',
-    lastContactDate: 'last_contact_date', last_contact_date: 'last_contact_date',
-    firstContactDate: 'first_contact_date', first_contact_date: 'first_contact_date',
-  };
+    const fieldMap = {
+      name: 'name', firstName: 'first_name', first_name: 'first_name',
+      email: 'email', phone: 'phone',
+      origin: 'origin', originDetail: 'origin_detail', origin_detail: 'origin_detail',
+      status: 'status', nationality: 'nationality',
+      address: 'address', postalCode: 'postal_code', postal_code: 'postal_code',
+      country: 'country', notes: 'notes',
+      lastContactDate: 'last_contact_date', last_contact_date: 'last_contact_date',
+      firstContactDate: 'first_contact_date', first_contact_date: 'first_contact_date',
+    };
 
-  const updates = [];
-  const vals = [];
+    const updates = [];
+    const vals = [];
+    const changedFields = [];
 
-  for (const [bodyKey, dbCol] of Object.entries(fieldMap)) {
-    if (req.body[bodyKey] !== undefined) {
-      updates.push(`${dbCol} = ?`);
-      vals.push(req.body[bodyKey]);
+    for (const [bodyKey, dbCol] of Object.entries(fieldMap)) {
+      if (req.body[bodyKey] !== undefined) {
+        updates.push(`${dbCol} = ?`);
+        vals.push(req.body[bodyKey]);
+        changedFields.push(bodyKey);
+      }
     }
-  }
 
-  if (req.body.alternatePhones !== undefined) {
-    updates.push('alternate_phones = ?');
-    vals.push(JSON.stringify(req.body.alternatePhones));
-  }
+    if (req.body.alternatePhones !== undefined) {
+      updates.push('alternate_phones = ?');
+      vals.push(JSON.stringify(req.body.alternatePhones));
+      changedFields.push('alternatePhones');
+    }
 
-  if (req.body.alternateEmails !== undefined) {
-    updates.push('alternate_emails = ?');
-    vals.push(JSON.stringify(req.body.alternateEmails));
-  }
+    if (req.body.alternateEmails !== undefined) {
+      updates.push('alternate_emails = ?');
+      vals.push(JSON.stringify(req.body.alternateEmails));
+      changedFields.push('alternateEmails');
+    }
 
-  if (updates.length > 0) {
+    if (updates.length === 0) {
+      return res.json({ success: true, contact: contactFromRow(existing) });
+    }
+
     updates.push("updated_at = datetime('now')");
     vals.push(id);
     db.prepare(`UPDATE contacts SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
+
+    await requirePersistDb();
+
+    try {
+      await recordAudit(req, {
+        action: 'contact_updated',
+        entityType: 'contact',
+        entityId: id,
+        contactId: id,
+        payload: {
+          fields: changedFields,
+          name: req.body.name ?? existing.name,
+          email: req.body.email ?? existing.email,
+          alternateEmails: req.body.alternateEmails,
+        },
+      });
+    } catch (auditErr) {
+      console.error('contact audit:', auditErr.message);
+    }
+
+    const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(id);
+    res.json({ success: true, contact: contactFromRow(row), persisted: true });
+  } catch (err) {
+    console.error('PUT /api/contacts/:id', err);
+    res.status(500).json({ error: err.message || 'Erreur enregistrement contact' });
+  }
+});
+
+// ─── INQUIRY / DISPONIBILITÉ ─────────────────────
+
+function getInquiriesForContact(contactId, { persistExtract = false } = {}) {
+  const contact = db.prepare('SELECT * FROM contacts WHERE id = ?').get(contactId);
+  if (!contact) return null;
+
+  const emails = db.prepare('SELECT * FROM emails WHERE contact_id = ? ORDER BY date DESC').all(contactId);
+  const extracted = extractInquiryFromEmails(emails);
+
+  let weeks = db.prepare(
+    'SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC',
+  ).all(contactId).map(toCamel);
+
+  if (extracted && persistExtract) {
+    const exists = weeks.some(w => w.checkIn === extracted.checkIn && w.checkOut === extracted.checkOut);
+    if (!exists) {
+      const rwId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      db.prepare(`
+        INSERT INTO requested_weeks (id, contact_id, season, check_in, check_out, adults, children, status, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'asked', ?)
+      `).run(
+        rwId,
+        contactId,
+        computeSeason(extracted.checkIn),
+        extracted.checkIn,
+        extracted.checkOut,
+        extracted.adults || 0,
+        extracted.children || 0,
+        extracted.notes || 'Extrait automatiquement des emails',
+      );
+      weeks = db.prepare(
+        'SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC',
+      ).all(contactId).map(toCamel);
+    }
   }
 
-  res.json({ success: true });
+  if (extracted && !weeks.some(w => w.checkIn === extracted.checkIn && w.checkOut === extracted.checkOut)) {
+    weeks = [{
+      id: 'extracted-preview',
+      contactId,
+      season: computeSeason(extracted.checkIn),
+      checkIn: extracted.checkIn,
+      checkOut: extracted.checkOut,
+      adults: extracted.adults || 0,
+      children: extracted.children || 0,
+      status: 'asked',
+      notes: extracted.notes || '',
+      extractedFromEmail: true,
+    }, ...weeks];
+  }
+
+  const enriched = weeks.map(w => {
+    const extra = enrichWeekWithAvailability(db, w, w.season);
+    return {
+      ...w,
+      availability: extra.availability,
+      availabilityLabel: extra.availabilityLabel,
+      suggestedPrice: extra.suggestedPrice,
+      alternatives: extra.alternatives,
+      extractedFromEmail: w.extractedFromEmail
+        || (extracted && extracted.checkIn === w.checkIn && extracted.checkOut === w.checkOut),
+    };
+  });
+
+  return { synced: persistExtract && !!extracted, extracted, weeks: enriched };
+}
+
+app.get('/api/contacts/:id/inquiries', (req, res) => {
+  try {
+    const result = getInquiriesForContact(req.params.id, { persistExtract: false });
+    if (!result) return res.status(404).json({ error: 'Contact introuvable' });
+    res.json(result);
+  } catch (err) {
+    console.error('Inquiries read error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/:id/sync-inquiry', (req, res) => {
+  try {
+    const result = getInquiriesForContact(req.params.id, { persistExtract: true });
+    if (!result) return res.status(404).json({ error: 'Contact introuvable' });
+    res.json(result);
+  } catch (err) {
+    console.error('Sync inquiry error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/:id/inquiry-draft', async (req, res) => {
+  try {
+    const contactId = req.params.id;
+    const {
+      type,
+      checkIn,
+      checkOut,
+      price,
+      adults,
+      alternativeWeeks = [],
+    } = req.body || {};
+
+    if (!['available', 'alternative'].includes(type)) {
+      return res.status(400).json({ error: 'type invalide (available | alternative)' });
+    }
+    if (!checkIn || !checkOut) {
+      return res.status(400).json({ error: 'checkIn et checkOut requis' });
+    }
+
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+
+    const season = computeSeason(checkIn);
+    const resolvedPrice = price || estimateWeeklyPrice(checkIn, season);
+
+    const payload = buildInquiryDraftPayload(db, contactId, contact, {
+      type,
+      checkIn,
+      checkOut,
+      price: resolvedPrice,
+      adults,
+      alternativeWeeks,
+      lang: req.body?.lang,
+    });
+
+    const draft = await saveDraftToMailbox({
+      to: payload.to,
+      subject: payload.subject,
+      text: payload.text,
+      inReplyTo: payload.inReplyTo,
+      references: payload.references,
+    });
+
+    if (type === 'available') {
+      db.prepare(`
+        UPDATE requested_weeks SET status = 'negotiating'
+        WHERE contact_id = ? AND check_in = ? AND check_out = ?
+      `).run(contactId, checkIn, checkOut);
+    }
+
+    res.json({ ok: true, ...draft, price: resolvedPrice });
+  } catch (err) {
+    console.error('Inquiry draft error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/:id/inquiry-preview', (req, res) => {
+  try {
+    const contactId = req.params.id;
+    const { type, checkIn, checkOut, price, adults, alternativeWeeks = [], lang } = req.body || {};
+    if (!['available', 'alternative'].includes(type)) {
+      return res.status(400).json({ error: 'type invalide (available | alternative)' });
+    }
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+
+    const emails = db.prepare('SELECT body_text FROM emails WHERE contact_id = ? ORDER BY date DESC LIMIT 8').all(contactId);
+    const corpus = emails.map(e => cleanStoredBodyText(e.body_text || '')).join('\n');
+    const season = computeSeason(checkIn);
+    const resolvedPrice = price || estimateWeeklyPrice(checkIn, season);
+
+    const preview = buildInquiryPreview(contact, {
+      type,
+      checkIn,
+      checkOut,
+      price: resolvedPrice,
+      adults,
+      alternativeWeeks,
+      lang,
+    }, corpus);
+
+    res.json({ ok: true, price: resolvedPrice, ...preview });
+  } catch (err) {
+    console.error('Inquiry preview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/requested-weeks/:id', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { status, notes, price } = req.body || {};
+    let result;
+    let wroteViaRecordAudit = false;
+    if (status === 'abandoned' || status === 'cancelled') {
+      result = removeCalendarBooking(db, { weekId: req.params.id }, auditCtxFromReq(req));
+    } else if (status === 'booked') {
+      result = confirmRequestedWeek(db, req.params.id, { price, notes });
+      if (result.ok) {
+        await recordAudit(req, {
+          action: 'week_confirmed',
+          entityType: 'week',
+          entityId: req.params.id,
+          contactId: result.contactId || '',
+          payload: { status, price: result.price, checkIn: result.checkIn, checkOut: result.checkOut },
+        });
+        wroteViaRecordAudit = true;
+      }
+    } else if (status) {
+      result = updateRequestedWeekStatus(db, req.params.id, status, notes);
+      if (result.ok) {
+        await recordAudit(req, {
+          action: 'week_status_updated',
+          entityType: 'week',
+          entityId: req.params.id,
+          payload: { status, notes },
+        });
+        wroteViaRecordAudit = true;
+      }
+    } else if (price != null) {
+      result = updateCalendarEvent(db, { weekId: req.params.id, price, notes }, auditCtxFromReq(req));
+    } else {
+      return res.status(400).json({ error: 'status ou price requis' });
+    }
+    if (!result.ok) return res.status(404).json({ error: result.error });
+    if (!wroteViaRecordAudit) await persistAfterWrite();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/requested-weeks/:id', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const result = removeCalendarBooking(db, { weekId: req.params.id }, auditCtxFromReq(req));
+    if (!result.ok) return res.status(404).json({ error: result.error });
+    await persistAfterWrite();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/calendar/events', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { eventId, status, price, notes, checkIn, checkOut } = req.body || {};
+    if (!eventId) return res.status(400).json({ error: 'eventId requis' });
+    const weekId = parseWeekEventId(eventId);
+    const stayId = parseStayEventId(eventId);
+    const result = updateCalendarEvent(db, { weekId, stayId, status, price, notes, checkIn, checkOut }, auditCtxFromReq(req));
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    await persistAfterWrite();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/calendar/events/:eventId', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { eventId } = req.params;
+    const weekId = parseWeekEventId(eventId);
+    const stayId = parseStayEventId(eventId);
+    const result = removeCalendarBooking(db, { weekId, stayId }, auditCtxFromReq(req));
+    if (!result.ok) return res.status(404).json({ error: result.error });
+    await persistAfterWrite();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/requested-weeks', (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    ensurePersonalContact(db);
+    const { contactId, checkIn, checkOut, adults, children, status, notes, price } = req.body || {};
+    if (!contactId || !checkIn || !checkOut) {
+      return res.status(400).json({ error: 'contactId, checkIn, checkOut requis' });
+    }
+    const result = assignWeekToContact(db, { contactId, checkIn, checkOut, adults, children, status, notes, price });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    if (process.env.VERCEL === '1') persistDb().catch(() => {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── POST /api/stays ───────────────────────────────
 
 app.post('/api/stays', (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const b = req.body;
   db.prepare(`
@@ -315,12 +1213,16 @@ app.post('/api/stays', (req, res) => {
   const stay = db.prepare('SELECT * FROM stays WHERE id = ?').get(id);
   const camel = toCamel(stay);
   try { camel.options = JSON.parse(stay.options || '{}'); } catch { camel.options = {}; }
+  if (process.env.VERCEL === '1') persistDb().catch(() => {});
   res.json(camel);
 });
 
 // ─── PUT /api/stays/:id ────────────────────────────
 
 app.put('/api/stays/:id', (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
   const { id } = req.params;
   const existing = db.prepare('SELECT * FROM stays WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: 'Stay not found' });
@@ -355,13 +1257,18 @@ app.put('/api/stays/:id', (req, res) => {
     db.prepare(`UPDATE stays SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
   }
 
+  if (process.env.VERCEL === '1') persistDb().catch(() => {});
   res.json({ success: true });
 });
 
 // ─── DELETE /api/stays/:id ─────────────────────────
 
 app.delete('/api/stays/:id', (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
   db.prepare('DELETE FROM stays WHERE id = ?').run(req.params.id);
+  if (process.env.VERCEL === '1') persistDb().catch(() => {});
   res.json({ success: true });
 });
 
@@ -616,11 +1523,209 @@ app.get('/api/client-analysis', (req, res) => {
     byNationality,
     loyalty,
     bySeason,
-    topClients: topClients.map(r => ({
+    topClients: topClients.map(r => formatContactResponse({
       ...toCamel(r),
       lastStay: r.last_stay,
     })),
   });
+});
+
+// ─── MAIL TEMPLATES & SUIVI ─────────────────────
+
+app.get('/api/mail/templates', (req, res) => {
+  try {
+    res.json({ templates: listMailTemplates(db) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/mail/templates/:key', async (req, res) => {
+  if (!verifyAdminToken(adminTokenFromReq(req))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { lang, subject, body } = req.body || {};
+    if (!lang || !subject || !body) return res.status(400).json({ error: 'lang, subject, body requis' });
+    saveMailTemplateOverride(db, {
+      templateKey: req.params.key,
+      lang,
+      subject,
+      body,
+      actor: adminActorFromReq(req),
+    });
+    await recordAudit(req, {
+      action: 'mail_template_updated',
+      entityType: 'mail_template',
+      entityId: `${req.params.key}:${lang}`,
+      payload: { subject, templateKey: req.params.key, lang },
+    });
+    res.json({ ok: true, templates: listMailTemplates(db) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/mail/templates/:key/reset', async (req, res) => {
+  if (!verifyAdminToken(adminTokenFromReq(req))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { lang } = req.body || {};
+    if (!lang) return res.status(400).json({ error: 'lang requis' });
+    resetMailTemplateOverride(db, req.params.key, lang);
+    await recordAudit(req, {
+      action: 'mail_template_reset',
+      entityType: 'mail_template',
+      entityId: `${req.params.key}:${lang}`,
+      payload: { templateKey: req.params.key, lang },
+    });
+    res.json({ ok: true, templates: listMailTemplates(db) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/mail/tracking/:contactId', (req, res) => {
+  try {
+    res.json({ tracking: getContactMailTracking(db, req.params.contactId) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/mail/tracking/:contactId/:templateKey', async (req, res) => {
+  if (!verifyAdminToken(adminTokenFromReq(req))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    const { status, lang, notes } = req.body || {};
+    upsertContactMailTracking(db, {
+      contactId: req.params.contactId,
+      templateKey: req.params.templateKey,
+      status: status || 'pending',
+      lang,
+      notes,
+      actor: adminActorFromReq(req),
+    });
+    await recordAudit(req, {
+      action: 'mail_tracking_updated',
+      entityType: 'mail_tracking',
+      entityId: `${req.params.contactId}:${req.params.templateKey}`,
+      contactId: req.params.contactId,
+      payload: { status, templateKey: req.params.templateKey, lang },
+    });
+    res.json({ ok: true, tracking: getContactMailTracking(db, req.params.contactId) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/mail/preview', async (req, res) => {
+  if (!verifyAdminToken(adminTokenFromReq(req))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    if (process.env.VERCEL === '1') await ensureFreshDb();
+    const { contactId, templateKey, lang = 'fr', attachToThread = true, replyToEmailId = null } = req.body || {};
+    if (!contactId || !templateKey) return res.status(400).json({ error: 'contactId et templateKey requis' });
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+    const rendered = renderMailTemplateForContact(db, contact, templateKey, lang);
+    if (!rendered) return res.status(404).json({ error: 'Modèle introuvable' });
+
+    const threadCandidates = listContactThreadCandidates(db, contactId, 8);
+    const defaultInbox = threadCandidates.find(c => c.isInbox && c.messageId);
+    const useThread = attachToThread !== false && (replyToEmailId || defaultInbox);
+    const thread = useThread
+      ? pickThreadReply(db, contactId, rendered.subject, replyToEmailId || defaultInbox?.id || null)
+      : { subject: rendered.subject };
+
+    res.json({
+      ...rendered,
+      to: contact.email || '',
+      subject: thread.subject,
+      body: rendered.body,
+      attachToThread: Boolean(useThread && thread.inReplyTo),
+      replyToEmailId: replyToEmailId || (useThread ? defaultInbox?.id || null : null),
+      threadCandidates,
+      from: LANDLORD.email,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/mail/draft', async (req, res) => {
+  if (!verifyAdminToken(adminTokenFromReq(req))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    await ensureFreshDb();
+    const {
+      contactId,
+      templateKey,
+      lang = 'fr',
+      subject,
+      text,
+      attachToThread = true,
+      replyToEmailId = null,
+      markSent = false,
+    } = req.body || {};
+    if (!contactId || !templateKey) return res.status(400).json({ error: 'contactId et templateKey requis' });
+    if (!subject || !text) return res.status(400).json({ error: 'subject et text requis' });
+
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+    const to = contact.email;
+    if (!to) return res.status(400).json({ error: 'Email locataire manquant sur la fiche contact' });
+
+    const thread = attachToThread
+      ? pickThreadReply(db, contactId, subject, replyToEmailId || null)
+      : { subject };
+
+    const draft = await saveDraftToMailbox({
+      to,
+      subject: thread.subject,
+      text,
+      inReplyTo: thread.inReplyTo,
+      references: thread.references,
+    });
+
+    if (markSent) {
+      upsertContactMailTracking(db, {
+        contactId,
+        templateKey,
+        status: 'sent',
+        lang,
+        actor: adminActorFromReq(req),
+      });
+    }
+
+    await requirePersistDb();
+    try {
+      await recordAudit(req, {
+        action: 'mail_draft_created',
+        entityType: 'mail_template',
+        entityId: `${contactId}:${templateKey}`,
+        contactId,
+        payload: { templateKey, lang, attachToThread: Boolean(thread.inReplyTo), subject: thread.subject },
+      });
+    } catch (auditErr) {
+      console.error('mail draft audit:', auditErr.message);
+    }
+
+    res.json({
+      ok: true,
+      ...draft,
+      text,
+      attachmentName: '',
+      tracking: markSent ? getContactMailTracking(db, contactId) : undefined,
+    });
+  } catch (err) {
+    console.error('POST /api/mail/draft', err);
+    res.status(500).json({ error: err.message || 'Erreur création brouillon' });
+  }
 });
 
 // ─── DOCUMENTS ADMINISTRATIFS ─────────────────────
@@ -633,6 +1738,7 @@ function loadContactForDocs(contactId) {
   try { contact.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { contact.alternateEmails = []; }
   contact.stays = db.prepare('SELECT * FROM stays WHERE contact_id = ? ORDER BY check_in DESC').all(contactId).map(toCamel);
   contact.requestedWeeks = db.prepare('SELECT * FROM requested_weeks WHERE contact_id = ? ORDER BY check_in DESC').all(contactId).map(toCamel);
+  contact.stayProgress = listStayProgressForContact(db, contactId);
   try { contact.profileJson = JSON.parse(row.profile_json || '{}'); } catch { contact.profileJson = {}; }
   return contact;
 }
@@ -642,7 +1748,14 @@ app.post('/api/documents/preview', (req, res) => {
     const { contactId, overrides = {} } = req.body || {};
     const contact = contactId ? loadContactForDocs(contactId) : {};
     const fields = previewDocumentFields(contact || {}, overrides);
-    res.json({ fields, contact: contact ? { id: contact.id, name: contact.name, email: contact.email } : null });
+    res.json({
+      fields,
+      contact: contact ? {
+        id: contact.id,
+        name: displayNameFromContact(contact),
+        email: contact.email,
+      } : null,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -655,40 +1768,161 @@ app.post('/api/documents/generate', async (req, res) => {
     const contact = loadContactForDocs(contactId);
     if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
 
-    const safeName = (contact.name || 'document').replace(/[^\w\s-àâäéèêëïîôùûüç-]/gi, '').trim().replace(/\s+/g, '_');
+    const filename = buildDocumentFilename(type, contact, overrides);
 
-    if (type === 'facture') {
-      const buf = generateInvoiceDocx(contact, overrides);
+    if (type === 'facture' || type === 'facture_acompte' || type === 'facture_solde') {
+      const docOverrides = {
+        ...overrides,
+        invoiceKind: type === 'facture_solde' ? 'solde' : type === 'facture_acompte' ? 'acompte' : overrides.invoiceKind,
+      };
+      const buf = generateInvoiceDocx(contact, docOverrides);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('Content-Disposition', `attachment; filename="Facture_${safeName}.docx"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.send(buf);
     }
 
     if (type === 'contrat') {
       const buf = generateContractDocx(contact, overrides);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('Content-Disposition', `attachment; filename="Contrat_${safeName}.docx"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.send(buf);
     }
 
     if (type === 'pack') {
       const buf = await generateContractPackZip(contact, overrides);
       res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', `attachment; filename="Pack_Contrat_${safeName}.zip"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.send(buf);
     }
 
-    res.status(400).json({ error: 'type invalide (facture | contrat | pack)' });
+    res.status(400).json({ error: 'type invalide (facture | facture_acompte | facture_solde | contrat | pack)' });
   } catch (err) {
     console.error('Document generation error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
+app.post('/api/documents/preview-file', async (req, res) => {
+  try {
+    const { contactId, type, overrides = {} } = req.body || {};
+    if (!contactId) return res.status(400).json({ error: 'contactId requis' });
+    if (!['facture', 'facture_acompte', 'facture_solde', 'contrat', 'pack'].includes(type)) {
+      return res.status(400).json({ error: 'type invalide (facture | facture_acompte | facture_solde | contrat | pack)' });
+    }
+
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+
+    const filename = buildDocumentFilename(type === 'pack' ? 'contrat' : type, contact, overrides);
+
+    if (type === 'facture' || type === 'facture_acompte' || type === 'facture_solde') {
+      const docOverrides = {
+        ...overrides,
+        invoiceKind: type === 'facture_solde' ? 'solde' : type === 'facture_acompte' ? 'acompte' : overrides.invoiceKind,
+      };
+      const buf = await generateInvoicePdf(contact, docOverrides);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      return res.send(buf);
+    }
+
+    if (type === 'contrat' || type === 'pack') {
+      const buf = await generateContractPdf(contact, overrides);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      if (type === 'pack') {
+        res.setHeader('X-Preview-Note', 'Aperçu du contrat — le pack ZIP inclut aussi les annexes CGL et FDC');
+      }
+      return res.send(buf);
+    }
+  } catch (err) {
+    console.error('Document preview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/documents/preview-email', async (req, res) => {
+  try {
+    const { contactId, type, overrides = {} } = req.body || {};
+    if (!contactId) return res.status(400).json({ error: 'contactId requis' });
+    if (!['facture', 'facture_acompte', 'facture_solde', 'contrat', 'pack'].includes(type)) {
+      return res.status(400).json({ error: 'type invalide (facture | facture_acompte | facture_solde | contrat | pack)' });
+    }
+
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+
+    const payload = await buildDocumentDraftPayload(contact, type, overrides);
+    const thread = pickThreadReply(db, contactId, payload.subject);
+
+    res.json({
+      to: payload.to,
+      subject: thread.subject,
+      text: payload.text,
+      attachmentName: payload.attachmentName,
+      from: LANDLORD.email,
+    });
+  } catch (err) {
+    console.error('Document email preview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/documents/draft-email', async (req, res) => {
+  try {
+    const { contactId, type, overrides = {} } = req.body || {};
+    if (!contactId) return res.status(400).json({ error: 'contactId requis' });
+    if (!['facture', 'facture_acompte', 'facture_solde', 'contrat', 'pack'].includes(type)) {
+      return res.status(400).json({ error: 'type invalide (facture | facture_acompte | facture_solde | contrat | pack)' });
+    }
+
+    const contact = loadContactForDocs(contactId);
+    if (!contact) return res.status(404).json({ error: 'Contact introuvable' });
+
+    const payload = await buildDocumentDraftPayload(contact, type, overrides);
+    const thread = pickThreadReply(db, contactId, payload.subject);
+
+    const draft = await saveDraftToMailbox({
+      to: payload.to,
+      subject: thread.subject,
+      text: payload.text,
+      attachments: payload.attachments,
+      inReplyTo: thread.inReplyTo,
+      references: thread.references,
+    });
+
+    res.json({
+      ok: true,
+      ...draft,
+      to: payload.to,
+      subject: thread.subject,
+      text: payload.text,
+      attachmentName: payload.attachmentName,
+      from: LANDLORD.email,
+    });
+  } catch (err) {
+    console.error('Draft email error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Erreurs non gérées → JSON (évite HTML 500 opaque côté Safari)
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled API error:', err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
 export default app;
 
 if (process.env.VERCEL !== '1') {
-  app.listen(PORT, () => {
-    console.log(`API server running on http://localhost:${PORT}`);
+  ensureDb().then(() => {
+    app.listen(PORT, () => {
+      console.log(`API server running on http://localhost:${PORT}`);
+    });
+  }).catch(err => {
+    console.error('Failed to start API:', err);
+    process.exit(1);
   });
 }

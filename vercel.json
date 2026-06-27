@@ -3,14 +3,34 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm install && npm install --prefix backend",
+  "crons": [
+    {
+      "path": "/api/cron/refresh",
+      "schedule": "0 6 * * *"
+    }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "functions": {
     "api/index.js": {
-      "includeFiles": "emails.db,backend/templates/**",
+      "includeFiles": "backend/deploy/emails.db,backend/templates/**,backend/wasm/**",
       "maxDuration": 60
     }
-  }
+  },
+  "headers": [
+    {
+      "source": "/data/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, stale-while-revalidate=3600" }]
+    },
+    {
+      "source": "/index.html",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+    },
+    {
+      "source": "/",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+    }
+  ]
 }

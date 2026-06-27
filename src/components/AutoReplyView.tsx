@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { fetchAutoReplies, fetchAutoReplyRules, approveReply, sendReply, cancelReply, createAutoReplyRule, toggleAutoReplyRule, deleteAutoReplyRule } from '../data';
 import type { AutoReply, AutoReplyRule, ReplyType } from '../types';
+import { formatDisplayName } from '../lib/formatName';
 
 // ============ CONFIG ============
 
@@ -69,7 +70,7 @@ function ReplyCard({ reply, onApprove, onSend, onCancel }: {
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-              {reply.contactName}
+              {formatDisplayName(reply.contactName)}
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
               {reply.contactEmail}
@@ -396,7 +397,7 @@ export default function AutoReplyView() {
                 opacity: reply.status === 'cancelled' ? 0.6 : 1,
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{reply.contactName}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{formatDisplayName(reply.contactName)}</div>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{reply.replySubject}</div>
                 </div>
                 <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 6, color: statusConfig[reply.status]?.color, background: statusConfig[reply.status]?.bg }}>

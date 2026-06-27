@@ -26,5 +26,9 @@ dist-ssr
 *.db
 *.db-shm
 *.db-wal
+backend/deploy/
 backend/.env
+backend/.env.vercel-setup
+backend/.env.vercel.production
 
+.env*.local
