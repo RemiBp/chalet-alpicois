@@ -18,7 +18,7 @@ import { seedProgressFromExcel } from './stay-progress.js';
 
 /**
  * @param {import('better-sqlite3').Database} db
- * @param {{ skipImap?: boolean, fullSync?: boolean }} opts
+ * @param {{ skipImap?: boolean, fullSync?: boolean, skipAi?: boolean }} opts
  */
 export async function runRefreshPipeline(db, opts = {}) {
   const started = Date.now();
@@ -50,7 +50,9 @@ export async function runRefreshPipeline(db, opts = {}) {
 
   report.proposals = scanEmailsForProposals(db, { sinceDays: 120, limit: 800 });
 
-  if (isDeepSeekConfigured() && process.env.AI_RECONCILE !== '0') {
+  if (opts.skipAi) {
+    report.aiReconcile = { skipped: true, reason: 'skipAi' };
+  } else if (isDeepSeekConfigured() && process.env.AI_RECONCILE !== '0') {
     try {
       report.aiReconcile = await reconcileBookingsWithAi(db, {
         limit: parseInt(process.env.AI_RECONCILE_LIMIT || '15', 10),

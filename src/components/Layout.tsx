@@ -1,7 +1,7 @@
 import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, Euro, History, AlertTriangle, Database, Eye, EyeOff, RefreshCw, CheckCircle2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { fetchApiHealth, fetchStaticDataMeta, getLastDataSource, markDataSourceLive, type ApiHealth, type StaticDataMeta } from '../data';
+import { fetchApiHealth, fetchStaticDataMeta, getLastDataSource, markDataSourceLive, markRefreshStateHandled, readRefreshState, type ApiHealth, type StaticDataMeta, type StoredRefreshState } from '../data';
 import type { AdminActor } from '../lib/adminSession';
 import { routes, isNavActive, viewFromPath } from '../lib/routes';
 import type { ViewType } from '../types';
@@ -63,6 +63,7 @@ export default function Layout({
   const [usingStatic, setUsingStatic] = useState(false);
   const [globalSyncing, setGlobalSyncing] = useState(false);
   const [globalSyncMsg, setGlobalSyncMsg] = useState<string | null>(null);
+  const syncHandledRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!loginOpen) {
@@ -83,6 +84,28 @@ export default function Layout({
   }, [location.pathname]);
 
   useEffect(() => {
+    const describeComplete = (report: StoredRefreshState['report']) => (
+      `Sync terminée — ${report?.imap?.totalSynced ?? 0} nouveau(x) mail(s), ${report?.pendingCount ?? 0} proposition(s) à vérifier.`
+    );
+    const applyState = (state: StoredRefreshState | null) => {
+      if (!state) return;
+      if (state.status === 'running') {
+        setGlobalSyncing(true);
+        setGlobalSyncMsg('Synchronisation des derniers mails en cours…');
+        return;
+      }
+      setGlobalSyncing(false);
+      if (state.status === 'complete') {
+        setGlobalSyncMsg(describeComplete(state.report));
+        if (!state.handledAt && syncHandledRef.current !== state.completedAt) {
+          syncHandledRef.current = state.completedAt || Date.now();
+          markRefreshStateHandled();
+          navigate(`${routes.historique}?sync=1`);
+        }
+      } else {
+        setGlobalSyncMsg(`Erreur sync — ${state.error || 'à vérifier'}`);
+      }
+    };
     const onStart = () => {
       setGlobalSyncing(true);
       setGlobalSyncMsg('Synchronisation des derniers mails en cours…');
@@ -90,7 +113,9 @@ export default function Layout({
     const onComplete = (event: Event) => {
       const report = (event as CustomEvent).detail || {};
       setGlobalSyncing(false);
-      setGlobalSyncMsg(`Sync terminée — ${report.imap?.totalSynced ?? 0} nouveau(x) mail(s), ${report.pendingCount ?? 0} proposition(s) à vérifier.`);
+      setGlobalSyncMsg(describeComplete(report));
+      syncHandledRef.current = Date.now();
+      markRefreshStateHandled();
       navigate(`${routes.historique}?sync=1`);
     };
     const onError = (event: Event) => {
@@ -100,7 +125,10 @@ export default function Layout({
     window.addEventListener('alpicois-sync-start', onStart);
     window.addEventListener('alpicois-sync-complete', onComplete);
     window.addEventListener('alpicois-sync-error', onError);
+    applyState(readRefreshState());
+    const id = window.setInterval(() => applyState(readRefreshState()), 1200);
     return () => {
+      window.clearInterval(id);
       window.removeEventListener('alpicois-sync-start', onStart);
       window.removeEventListener('alpicois-sync-complete', onComplete);
       window.removeEventListener('alpicois-sync-error', onError);

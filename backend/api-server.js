@@ -346,6 +346,7 @@ app.get('/api/cron/refresh', async (req, res) => {
     const report = await runRefreshOnce({
       skipImap: req.query?.skipImap === '1',
       fullSync: req.query?.fullSync === '1',
+      skipAi: req.query?.skipAi === '1',
     }, {
       actor: 'automatic',
       payload: {
@@ -368,6 +369,7 @@ app.post('/api/cron/refresh', async (req, res) => {
     const report = await runRefreshOnce({
       skipImap: req.body?.skipImap === true,
       fullSync: req.body?.fullSync === true,
+      skipAi: req.body?.skipAi === true,
     }, {
       actor: actor === 'automatic' ? 'automatic' : actor,
     });

@@ -1084,7 +1084,47 @@ export interface RefreshReport {
   reusedInFlight?: boolean;
 }
 
+export interface StoredRefreshState {
+  status: 'running' | 'complete' | 'error';
+  startedAt: number;
+  completedAt?: number;
+  handledAt?: number;
+  skipImap?: boolean;
+  report?: RefreshReport;
+  error?: string;
+}
+
 let refreshInflight: Promise<RefreshReport> | null = null;
+const REFRESH_STATE_KEY = 'alpicois-refresh-state';
+
+function readStoredRefreshState(): StoredRefreshState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(REFRESH_STATE_KEY);
+    return raw ? JSON.parse(raw) as StoredRefreshState : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredRefreshState(state: StoredRefreshState): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(REFRESH_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // The in-memory event path still works if storage is unavailable.
+  }
+}
+
+export function readRefreshState(): StoredRefreshState | null {
+  return readStoredRefreshState();
+}
+
+export function markRefreshStateHandled(): void {
+  const state = readStoredRefreshState();
+  if (!state || state.handledAt) return;
+  writeStoredRefreshState({ ...state, handledAt: Date.now() });
+}
 
 function emitRefreshEvent(name: 'start' | 'complete' | 'error', detail?: unknown) {
   if (typeof window === 'undefined') return;
@@ -1094,7 +1134,7 @@ function emitRefreshEvent(name: 'start' | 'complete' | 'error', detail?: unknown
 async function runDataRefresh(skipImap: boolean): Promise<RefreshReport> {
   const res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
     method: 'POST',
-    body: JSON.stringify({ skipImap, fullSync: false }),
+    body: JSON.stringify({ skipImap, fullSync: false, skipAi: true }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -1102,15 +1142,29 @@ async function runDataRefresh(skipImap: boolean): Promise<RefreshReport> {
   }
   invalidateContactsCache();
   const report = await res.json() as RefreshReport;
+  writeStoredRefreshState({
+    ...(readStoredRefreshState() || { startedAt: Date.now(), skipImap }),
+    status: 'complete',
+    completedAt: Date.now(),
+    report,
+  });
   emitRefreshEvent('complete', report);
   return report;
 }
 
 export async function triggerDataRefresh(skipImap = false): Promise<RefreshReport> {
   if (refreshInflight) return refreshInflight;
+  writeStoredRefreshState({ status: 'running', startedAt: Date.now(), skipImap });
   emitRefreshEvent('start', { skipImap });
   const request: Promise<RefreshReport> = runDataRefresh(skipImap).catch(err => {
-    emitRefreshEvent('error', err instanceof Error ? err.message : String(err));
+    const message = err instanceof Error ? err.message : String(err);
+    writeStoredRefreshState({
+      ...(readStoredRefreshState() || { startedAt: Date.now(), skipImap }),
+      status: 'error',
+      completedAt: Date.now(),
+      error: message,
+    });
+    emitRefreshEvent('error', message);
     throw err;
   }).finally(() => {
     refreshInflight = null;
