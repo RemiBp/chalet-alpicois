@@ -352,8 +352,8 @@ export default function CalendarView({ isAdmin = false }: {
                 <option value="confirmed">Confirmé</option>
                 <option value="paid">Payé</option>
                 <option value="pending">En cours</option>
-                <option value="negotiating">En négociation</option>
-                <option value="asked">En négociation</option>
+                <option value="negotiating">Fin de négociation</option>
+                <option value="asked">Fin de négociation</option>
                 <option value="booked">Réservé</option>
                 <option value="abandoned">Annulé / libérer</option>
               </select>
@@ -465,8 +465,8 @@ export default function CalendarView({ isAdmin = false }: {
               <select value={assignStatus} onChange={e => setAssignStatus(e.target.value as typeof assignStatus)}
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 11 }}>
                 <option value="booked">Confirmé (bloque)</option>
-                <option value="negotiating">En négociation</option>
-                <option value="asked">En négociation</option>
+                <option value="negotiating">Fin de négociation</option>
+                <option value="asked">Fin de négociation</option>
               </select>
               <input type="number" value={assignPrice} onChange={e => setAssignPrice(e.target.value)}
                 placeholder="Prix €" style={{ width: 80, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 11 }} />

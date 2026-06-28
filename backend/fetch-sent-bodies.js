@@ -64,7 +64,7 @@ async function main() {
   const upsert = db.prepare(`
     INSERT INTO emails (uid, message_id, mailbox, sender, sender_name, recipients, date, subject, body_text, seen, flagged)
     VALUES (@uid, @messageId, @mailbox, @sender, @senderName, @recipients, @date, @subject, @bodyText, @seen, @flagged)
-    ON CONFLICT(uid) DO UPDATE SET
+    ON CONFLICT(mailbox, uid) DO UPDATE SET
       body_text = CASE WHEN @bodyText != '' THEN @bodyText ELSE body_text END,
       sender = @sender,
       sender_name = @senderName,

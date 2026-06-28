@@ -57,6 +57,7 @@ function buildFromJson() {
       seen INTEGER DEFAULT 0, flagged INTEGER DEFAULT 0, parsed INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')), contact_id TEXT
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_mailbox_uid ON emails(mailbox, uid);
     CREATE TABLE requested_weeks (
       id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, season TEXT, week_number INTEGER,
       check_in TEXT, check_out TEXT, adults INTEGER DEFAULT 1, children INTEGER DEFAULT 0,

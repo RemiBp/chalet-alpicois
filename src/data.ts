@@ -1081,19 +1081,28 @@ export interface RefreshReport {
   proposals?: { proposalsCreated?: number };
   pendingCount?: number;
   durationMs?: number;
+  reusedInFlight?: boolean;
 }
 
+let refreshInflight: Promise<RefreshReport> | null = null;
+
 export async function triggerDataRefresh(skipImap = false): Promise<RefreshReport> {
-  const res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
-    method: 'POST',
-    body: JSON.stringify({ skipImap }),
+  if (refreshInflight) return refreshInflight;
+  refreshInflight = (async () => {
+    const res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ skipImap, fullSync: false }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || `Refresh ${res.status}`);
+    }
+    invalidateContactsCache();
+    return res.json() as Promise<RefreshReport>;
+  })().finally(() => {
+    refreshInflight = null;
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Refresh ${res.status}`);
-  }
-  invalidateContactsCache();
-  return res.json();
+  return refreshInflight;
 }
 
 export async function updateRequestedWeek(

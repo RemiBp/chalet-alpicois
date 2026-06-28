@@ -41,8 +41,8 @@ const originOptions: { value: ContactOrigin; label: string }[] = [
 ];
 
 const rwStatus: Record<string, { label: string; color: string }> = {
-  asked: { label: 'En négociation', color: '#d97706' },
-  negotiating: { label: 'En négociation', color: '#d97706' },
+  asked: { label: 'Fin de négociation', color: '#d97706' },
+  negotiating: { label: 'Fin de négociation', color: '#d97706' },
   abandoned: { label: 'Abandonné', color: '#94a3b8' },
   booked: { label: 'Réservé', color: '#16a34a' },
 };

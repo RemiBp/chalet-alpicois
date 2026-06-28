@@ -55,7 +55,7 @@ export async function aiExtractBookingForContact(db, contactId) {
   const content = await deepseekChat([
     { role: 'system', content: BOOKING_PROMPT },
     { role: 'user', content: `Contact ID ${contactId}\n\n${corpus.slice(0, 12000)}` },
-  ], { maxTokens: 500 });
+  ], { maxTokens: 500, timeoutMs: 10000 });
 
   const parsed = parseJsonFromAi(content);
   if (!parsed?.checkIn || !parsed?.checkOut) return { ...parsed, applied: false };

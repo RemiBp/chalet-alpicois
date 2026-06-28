@@ -39,8 +39,8 @@ export default function ProspectsView() {
 
   const filterLabels: Record<ProspectFilter, string> = {
     all: 'Tous',
-    asked: 'En négociation',
-    negotiating: 'En négociation',
+    asked: 'Fin de négociation',
+    negotiating: 'Fin de négociation',
     abandoned: 'Abandonné',
   };
 
@@ -125,8 +125,8 @@ export default function ProspectsView() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {contact.requestedWeeks.map(rw => {
                 const reqStatusLabel =
-                  rw.status === 'asked' ? 'En négociation' :
-                  rw.status === 'negotiating' ? 'En négociation' :
+                  rw.status === 'asked' ? 'Fin de négociation' :
+                  rw.status === 'negotiating' ? 'Fin de négociation' :
                   rw.status === 'abandoned' ? 'Abandonné' : 'Réservé';
                 const reqColor =
                   rw.status === 'booked' ? '#16a34a' :

@@ -69,6 +69,7 @@ export function linkOrphanEmails(db) {
   try {
     db.exec('ALTER TABLE emails ADD COLUMN contact_id TEXT');
   } catch { /* exists */ }
+  db.exec("UPDATE emails SET contact_id = NULL WHERE contact_id = ''");
 
   ensurePersonalContact(db);
 

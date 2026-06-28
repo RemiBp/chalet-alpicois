@@ -102,6 +102,34 @@ app.use(express.json({ limit: '2mb' }));
 
 /** @type {import('better-sqlite3').Database | null} */
 let db = null;
+let refreshInFlight = null;
+
+async function runRefreshOnce(opts, audit) {
+  if (refreshInFlight) return { ...(await refreshInFlight), reusedInFlight: true };
+  refreshInFlight = (async () => {
+    const report = await runRefreshPipeline(db, opts);
+    if (audit) {
+      appendAudit(db, {
+        action: 'data_refresh',
+        entityType: 'pipeline',
+        entityId: 'refresh',
+        payload: {
+          mails: report.imap?.totalSynced ?? 0,
+          profiles: report.profiles?.filledCoords ?? 0,
+          signals: report.signals?.recordsUpdated ?? 0,
+          proposals: report.proposals?.proposalsCreated ?? 0,
+          ...(audit.payload || {}),
+        },
+        actor: audit.actor || 'automatic',
+      });
+    }
+    await persistDb();
+    return { ...report, pendingCount: countPendingProposals(db) };
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
 
 app.use('/api', async (req, res, next) => {
   try {
@@ -315,22 +343,16 @@ app.get('/api/cron/refresh', async (req, res) => {
     return res.status(401).json({ error: 'CRON_SECRET requis' });
   }
   try {
-    const report = await runRefreshPipeline(db, { skipImap: req.query?.skipImap === '1' });
-    appendAudit(db, {
-      action: 'data_refresh',
-      entityType: 'pipeline',
-      entityId: 'refresh',
-      payload: {
-        mails: report.imap?.totalSynced ?? 0,
-        profiles: report.profiles?.filledCoords ?? 0,
-        signals: report.signals?.recordsUpdated ?? 0,
-        proposals: report.proposals?.proposalsCreated ?? 0,
-        source: 'cron',
-      },
+    const report = await runRefreshOnce({
+      skipImap: req.query?.skipImap === '1',
+      fullSync: req.query?.fullSync === '1',
+    }, {
       actor: 'automatic',
+      payload: {
+        source: 'cron',
+      }
     });
-    await persistDb();
-    res.json({ ...report, pendingCount: countPendingProposals(db) });
+    res.json(report);
   } catch (err) {
     console.error('Cron refresh:', err);
     res.status(500).json({ error: err.message });
@@ -342,23 +364,14 @@ app.post('/api/cron/refresh', async (req, res) => {
     return res.status(401).json({ error: 'CRON_SECRET ou admin requis' });
   }
   try {
-    const report = await runRefreshPipeline(db, { skipImap: req.body?.skipImap === true });
-    await persistDb();
     const actor = verifyAdminToken(adminTokenFromReq(req)) ? adminActorFromReq(req) : 'automatic';
-    appendAudit(db, {
-      action: 'data_refresh',
-      entityType: 'pipeline',
-      entityId: 'refresh',
-      payload: {
-        mails: report.imap?.totalSynced ?? 0,
-        profiles: report.profiles?.filledCoords ?? 0,
-        signals: report.signals?.recordsUpdated ?? 0,
-        proposals: report.proposals?.proposalsCreated ?? 0,
-      },
+    const report = await runRefreshOnce({
+      skipImap: req.body?.skipImap === true,
+      fullSync: req.body?.fullSync === true,
+    }, {
       actor: actor === 'automatic' ? 'automatic' : actor,
     });
-    if (process.env.VERCEL === '1') await persistDb().catch(() => {});
-    res.json({ ...report, pendingCount: countPendingProposals(db) });
+    res.json(report);
   } catch (err) {
     console.error('Refresh:', err);
     res.status(500).json({ error: err.message });

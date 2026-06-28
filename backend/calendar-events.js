@@ -13,6 +13,14 @@ function eventOverlapsWeek(event, week) {
   return event.checkIn < week.checkOut && event.checkOut > week.checkIn;
 }
 
+function eventsOverlap(a, b) {
+  return a.checkIn < b.checkOut && a.checkOut > b.checkIn;
+}
+
+function isOfficialBookingEvent(event) {
+  return Boolean(event.progress?.contractNumber);
+}
+
 function weekContainsDate(week, isoDate) {
   return isoDate >= week.checkIn && isoDate < week.checkOut;
 }
@@ -151,7 +159,7 @@ export function getCalendarEvents(db, season = '2026-2027') {
       status: w.status,
       label: personal ? 'Semaine personnelle' : (
         w.status === 'booked' ? 'Réservé' :
-          w.status === 'negotiating' || w.status === 'asked' ? 'En négociation' : 'En cours'
+          w.status === 'negotiating' || w.status === 'asked' ? 'Fin de négociation' : 'En cours'
       ),
       blocksCalendar: w.status === 'booked' || personal,
       personal,
@@ -166,9 +174,18 @@ export function getCalendarEvents(db, season = '2026-2027') {
   const weeks = generateSundayWeeks(season);
   const seasonStart = weeks[0]?.checkIn;
   const seasonEnd = weeks[weeks.length - 1]?.checkOut;
-  const seasonEvents = events.filter(e =>
+  const rawSeasonEvents = events.filter(e =>
     !seasonStart || !seasonEnd || (e.checkIn <= seasonEnd && e.checkOut >= seasonStart),
   );
+  const officialBlockedEvents = rawSeasonEvents.filter(e =>
+    e.blocksCalendar && !e.personal && isOfficialBookingEvent(e),
+  );
+  const seasonEvents = rawSeasonEvents.filter(e => {
+    if (!e.blocksCalendar || e.personal || isOfficialBookingEvent(e)) return true;
+    return !officialBlockedEvents.some(official =>
+      official.contactId !== e.contactId && eventsOverlap(e, official),
+    );
+  });
 
   const grid = weeks.map(w => {
     const weekEvents = dedupeWeekEvents(

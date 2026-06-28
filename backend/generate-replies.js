@@ -81,7 +81,7 @@ async function generateReply(emailId, subject, sender, senderName, bodyText) {
     const content = await deepseekChat([
       { role: 'system', content: REPLY_PROMPT },
       { role: 'user', content: userContent },
-    ]);
+    ], { timeoutMs: 10000 });
 
     if (!content) return null;
     const clean = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();

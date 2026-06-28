@@ -12,25 +12,36 @@ export function isDeepSeekConfigured() {
 
 /**
  * @param {Array<{role: string, content: string}>} messages
- * @param {{ maxTokens?: number, model?: string, temperature?: number }} opts
+ * @param {{ maxTokens?: number, model?: string, temperature?: number, timeoutMs?: number }} opts
  */
 export async function deepseekChat(messages, opts = {}) {
   const key = process.env.DEEPSEEK_API_KEY?.trim();
   if (!key) throw new Error('DEEPSEEK_API_KEY non configuré');
 
-  const response = await fetch(`${DEEPSEEK_BASE_URL}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model: opts.model || DEFAULT_MODEL,
-      messages,
-      temperature: opts.temperature ?? 0.05,
-      max_tokens: opts.maxTokens ?? 800,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 12000);
+  let response;
+  try {
+    response = await fetch(`${DEEPSEEK_BASE_URL}/v1/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: opts.model || DEFAULT_MODEL,
+        messages,
+        temperature: opts.temperature ?? 0.05,
+        max_tokens: opts.maxTokens ?? 800,
+      }),
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') throw new Error('DeepSeek timeout');
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     throw new Error(`DeepSeek ${response.status}: ${(await response.text()).slice(0, 200)}`);

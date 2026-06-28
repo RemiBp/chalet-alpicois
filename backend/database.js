@@ -100,7 +100,74 @@ import { ensureAuditTable } from './audit-log.js';
 import { ensureMailTemplateTables } from './mail-templates.js';
 import { ensureStayProgressTable, seedProgressFromExcel } from './stay-progress.js';
 
+function ensureMailboxScopedEmailUid(db) {
+  const columns = db.prepare("PRAGMA table_info('emails')").all();
+  if (!columns.length) return;
+  const indexes = db.prepare("PRAGMA index_list('emails')").all();
+  const hasGlobalUidUnique = indexes.some(index => {
+    if (!index.unique) return false;
+    const cols = db.prepare(`PRAGMA index_info('${index.name.replace(/'/g, "''")}')`).all();
+    return cols.length === 1 && cols[0].name === 'uid';
+  });
+  const hasMailboxUidUnique = indexes.some(index => {
+    if (!index.unique) return false;
+    const cols = db.prepare(`PRAGMA index_info('${index.name.replace(/'/g, "''")}')`).all().map(c => c.name).join(',');
+    return cols === 'mailbox,uid';
+  });
+  if (!hasGlobalUidUnique && hasMailboxUidUnique) return;
+
+  const contactIdColumn = columns.some(c => c.name === 'contact_id') ? ', contact_id' : '';
+  const contactIdSelect = columns.some(c => c.name === 'contact_id') ? ', contact_id' : '';
+
+  const foreignKeys = db.pragma('foreign_keys', { simple: true });
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE emails_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          uid INTEGER,
+          message_id TEXT,
+          mailbox TEXT DEFAULT 'INBOX',
+          sender TEXT NOT NULL,
+          sender_name TEXT DEFAULT '',
+          recipients TEXT DEFAULT '',
+          date TEXT NOT NULL,
+          subject TEXT DEFAULT '',
+          body_text TEXT DEFAULT '',
+          seen INTEGER DEFAULT 0,
+          flagged INTEGER DEFAULT 0,
+          parsed INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+          ${contactIdColumn ? ', contact_id TEXT' : ''}
+        );
+      `);
+      db.exec(`
+        INSERT INTO emails_next (
+          id, uid, message_id, mailbox, sender, sender_name, recipients, date, subject,
+          body_text, seen, flagged, parsed, created_at${contactIdColumn}
+        )
+        SELECT
+          id, uid, message_id, COALESCE(mailbox, 'INBOX'), sender, sender_name, recipients, date, subject,
+          body_text, seen, flagged, parsed, created_at${contactIdSelect}
+        FROM emails
+        ORDER BY id;
+      `);
+      db.exec('DROP TABLE emails');
+      db.exec('ALTER TABLE emails_next RENAME TO emails');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_mailbox_uid ON emails(mailbox, uid)');
+      if (contactIdColumn) {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_emails_contact ON emails(contact_id)');
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC)');
+    })();
+  } finally {
+    db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+  }
+}
+
 function migrateSchema(db) {
+  ensureMailboxScopedEmailUid(db);
   ensureAuditTable(db);
   ensureMailTemplateTables(db);
   ensureStayProgressTable(db);
@@ -126,6 +193,7 @@ function migrateSchema(db) {
   for (const sql of alters) {
     try { db.exec(sql); } catch { /* exists */ }
   }
+  try { db.exec("UPDATE emails SET contact_id = NULL WHERE contact_id = ''"); } catch { /* column may not exist yet */ }
 }
 
 export function ensureDb() {

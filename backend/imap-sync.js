@@ -78,7 +78,7 @@ async function syncMailbox(db, client, mailboxPath, full = false) {
         const senderAddr = sender?.address || '';
         const bodyText = extractBodyText(sourceBuf);
 
-        insertEmail.run({
+        const inserted = insertEmail.run({
           uid: meta.uid,
           messageId: envelope.messageId || '',
           mailbox: mailboxPath,
@@ -92,7 +92,7 @@ async function syncMailbox(db, client, mailboxPath, full = false) {
           flagged: meta.flags?.has?.('\\Flagged') ? 1 : 0,
         });
 
-        count++;
+        count += inserted.changes;
         updateLastUid.run(key, String(meta.uid));
       } catch {
         errors++;
