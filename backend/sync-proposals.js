@@ -6,6 +6,7 @@ import { appendAudit, listAuditLog } from './audit-log.js';
 import { upsertStayProgress, getStayProgress } from './stay-progress.js';
 import { extractInquiryBest } from './extract-inquiry.js';
 import { isNoiseEmail } from './price-extract.js';
+import { cleanStoredBodyText } from './email-body.js';
 
 const PROGRESS_LABELS = {
   contractSigned: 'Contrat signé',
@@ -161,12 +162,14 @@ export function scanEmailsForProposals(db, opts = {}) {
   let reviewProposals = 0;
 
   for (const email of emails) {
-    const hints = detectProgressHints(email.subject, email.body_text, email.mailbox);
-    const dates = extractInquiryBest(`${email.subject}\n${email.body_text}`, email.date)
+    const cleanBody = cleanStoredBodyText(email.body_text || '');
+    const cleanEmail = { ...email, body_text: cleanBody };
+    const hints = detectProgressHints(email.subject, cleanBody, email.mailbox);
+    const dates = extractInquiryBest(`${email.subject}\n${cleanBody}`, email.date)
       || findDatesFromContact(db, email.contact_id);
 
     if (!dates?.checkIn) {
-      reviewProposals += proposeMailReviewIfUseful(db, email, {
+      reviewProposals += proposeMailReviewIfUseful(db, cleanEmail, {
         reviewLimit,
         currentCount: reviewProposals,
         reason: 'Mail client sans séjour identifié automatiquement',
@@ -221,7 +224,7 @@ export function scanEmailsForProposals(db, opts = {}) {
     }
 
     if (createdForEmail === 0) {
-      reviewProposals += proposeMailReviewIfUseful(db, email, {
+      reviewProposals += proposeMailReviewIfUseful(db, cleanEmail, {
         reviewLimit,
         currentCount: reviewProposals,
         reason: 'Aucune mise à jour sûre détectée automatiquement',
@@ -239,6 +242,7 @@ function proposeMailReviewIfUseful(db, email, { reviewLimit, currentCount, reaso
   const text = `${email.subject || ''}\n${email.body_text || ''}`;
   const looksRelevant = /alpicois|chalet|semaine|week|reservation|réservation|location|contrat|facture|assurance|acompte|solde|disponib|ski|plagne|janv|févr|mars|avril|dec|déc|2026|2027|2028/i.test(text);
   if (!looksRelevant) return false;
+  const action = suggestedReviewAction(text);
 
   return proposeSyncChange(db, {
     entityType: 'mail_review',
@@ -246,7 +250,7 @@ function proposeMailReviewIfUseful(db, email, { reviewLimit, currentCount, reaso
     contactId: email.contact_id,
     label: `Mail à qualifier — ${email.contact_name}`,
     field: 'mailReview',
-    proposed: 'Revoir ce mail et confirmer si une action est nécessaire',
+    proposed: action,
     emailId: email.id,
     emailSubject: email.subject,
     emailExcerpt: String(email.body_text || '').replace(/\s+/g, ' ').slice(0, 220),
@@ -254,6 +258,18 @@ function proposeMailReviewIfUseful(db, email, { reviewLimit, currentCount, reaso
     checkIn: dates?.checkIn || null,
     checkOut: dates?.checkOut || null,
   });
+}
+
+function suggestedReviewAction(text) {
+  const suggestions = [];
+  if (/pass(?:eport)?|identity|id card|pi[eè]ce d['’]?identit/i.test(text)) suggestions.push("pièce d'identité");
+  if (/assurance|insurance|attestation/i.test(text)) suggestions.push('assurance');
+  if (/contrat|contract/i.test(text)) suggestions.push('contrat');
+  if (/phone|t[eé]l|mobile|\b00\d{6,}|\+?\d[\d\s().-]{7,}/i.test(text)) suggestions.push('coordonnées');
+  if (/\b(?:adult|adulte|child|children|enfant|people|personnes)\b/i.test(text)) suggestions.push('composition du groupe');
+  if (/adresse|address|postcode|postal/i.test(text)) suggestions.push('adresse');
+  if (!suggestions.length) return 'Revoir ce mail et confirmer si une action est nécessaire';
+  return `Vérifier et rattacher : ${[...new Set(suggestions)].join(', ')}`;
 }
 
 function findDatesFromContact(db, contactId) {

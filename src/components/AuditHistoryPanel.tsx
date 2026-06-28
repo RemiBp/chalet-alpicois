@@ -48,6 +48,26 @@ function proposalLabel(entry: AuditEntry) {
   return ACTION_LABELS[entry.action] || entry.action;
 }
 
+function readableText(value: unknown) {
+  let text = String(value ?? '');
+  const fixes: [RegExp, string][] = [
+    [/r�servation/gi, 'réservation'],
+    [/int�ress�es/gi, 'intéressées'],
+    [/int�ress�s/gi, 'intéressés'],
+    [/int�ress�/gi, 'intéressé'],
+    [/pr�c�dent/gi, 'précédent'],
+    [/d�cembre/gi, 'décembre'],
+    [/f�vrier/gi, 'février'],
+    [/s�jour/gi, 'séjour'],
+    [/pi�ce/gi, 'pièce'],
+    [/identit�/gi, 'identité'],
+    [/t�l/gi, 'tél'],
+    [/�/g, 'é'],
+  ];
+  for (const [bad, good] of fixes) text = text.replace(bad, good);
+  return text;
+}
+
 export default function AuditHistoryPanel({
   isAdmin,
   focusPending = false,
@@ -235,7 +255,7 @@ export default function AuditHistoryPanel({
                 )}
                 {isExpanded && entry.payload?.reviewReason != null && (
                   <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                    Pourquoi : {String(entry.payload.reviewReason)}
+                    Pourquoi : {readableText(entry.payload.reviewReason)}
                   </div>
                 )}
                 {isExpanded && entry.payload?.emailExcerpt != null && (
@@ -244,7 +264,7 @@ export default function AuditHistoryPanel({
                     background: 'var(--bg-body)', border: '1px solid var(--border-subtle)',
                     fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5,
                   }}>
-                    {String(entry.payload.emailExcerpt)}
+                    {readableText(entry.payload.emailExcerpt)}
                   </div>
                 )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', fontSize: 11, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.45 }}>
@@ -346,5 +366,5 @@ function friendlyField(field: string) {
 function friendlyValue(value: unknown) {
   if (typeof value === 'boolean') return value ? 'marquer comme reçu / fait' : 'non';
   if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
+  return readableText(value);
 }
