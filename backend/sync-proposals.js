@@ -5,6 +5,7 @@
 import { appendAudit, listAuditLog } from './audit-log.js';
 import { upsertStayProgress, getStayProgress } from './stay-progress.js';
 import { extractInquiryBest } from './extract-inquiry.js';
+import { isNoiseEmail } from './price-extract.js';
 
 const PROGRESS_LABELS = {
   contractSigned: 'Contrat signé',
@@ -18,6 +19,7 @@ const PROGRESS_LABELS = {
   idReceived: "Pièce d'identité reçue",
   depositGuaranteePaid: 'Caution reçue',
   depositGuaranteeReturned: 'Caution rendue',
+  mailReview: 'Mail à qualifier',
 };
 
 export function countPendingProposals(db) {
@@ -46,13 +48,15 @@ export function proposeSyncChange(db, {
   before = null,
   emailId = null,
   emailSubject = null,
+  emailExcerpt = null,
+  reviewReason = null,
   checkIn = null,
   checkOut = null,
 }) {
   ensureValidationColumn(db);
   const existing = db.prepare(`
     SELECT id FROM audit_log
-    WHERE validation_status = 'pending' AND action = 'sync_proposal' AND entity_id = ?
+    WHERE action = 'sync_proposal' AND entity_id = ?
   `).get(entityId);
   if (existing) return false;
 
@@ -68,6 +72,8 @@ export function proposeSyncChange(db, {
       before,
       emailId,
       emailSubject,
+      emailExcerpt,
+      reviewReason,
       checkIn,
       checkOut,
     },
@@ -138,6 +144,7 @@ function detectSentMailStep(text) {
 export function scanEmailsForProposals(db, opts = {}) {
   const sinceDays = opts.sinceDays ?? 120;
   const limit = opts.limit ?? 800;
+  const reviewLimit = opts.reviewLimit ?? 0;
   const since = new Date();
   since.setDate(since.getDate() - sinceDays);
 
@@ -151,14 +158,23 @@ export function scanEmailsForProposals(db, opts = {}) {
   `).all(since.toISOString(), limit);
 
   let proposals = 0;
+  let reviewProposals = 0;
 
   for (const email of emails) {
     const hints = detectProgressHints(email.subject, email.body_text, email.mailbox);
     const dates = extractInquiryBest(`${email.subject}\n${email.body_text}`, email.date)
       || findDatesFromContact(db, email.contact_id);
 
-    if (!dates?.checkIn) continue;
+    if (!dates?.checkIn) {
+      reviewProposals += proposeMailReviewIfUseful(db, email, {
+        reviewLimit,
+        currentCount: reviewProposals,
+        reason: 'Mail client sans séjour identifié automatiquement',
+      }) ? 1 : 0;
+      continue;
+    }
 
+    let createdForEmail = 0;
     for (const hint of hints) {
       if (hint.field === 'depositInvoiceSent' || hint.field === 'contractSent' || hint.field === 'balanceInvoiceSent') {
         if (proposeSyncChange(db, {
@@ -172,7 +188,10 @@ export function scanEmailsForProposals(db, opts = {}) {
           emailSubject: email.subject,
           checkIn: dates.checkIn,
           checkOut: dates.checkOut,
-        })) proposals++;
+        })) {
+          proposals++;
+          createdForEmail++;
+        }
         continue;
       }
 
@@ -195,11 +214,46 @@ export function scanEmailsForProposals(db, opts = {}) {
         emailSubject: email.subject,
         checkIn: dates.checkIn,
         checkOut: dates.checkOut,
-      })) proposals++;
+      })) {
+        proposals++;
+        createdForEmail++;
+      }
+    }
+
+    if (createdForEmail === 0) {
+      reviewProposals += proposeMailReviewIfUseful(db, email, {
+        reviewLimit,
+        currentCount: reviewProposals,
+        reason: 'Aucune mise à jour sûre détectée automatiquement',
+        dates,
+      }) ? 1 : 0;
     }
   }
 
-  return { emailsScanned: emails.length, proposalsCreated: proposals };
+  return { emailsScanned: emails.length, proposalsCreated: proposals + reviewProposals, updatesCreated: proposals, reviewsCreated: reviewProposals };
+}
+
+function proposeMailReviewIfUseful(db, email, { reviewLimit, currentCount, reason, dates = null }) {
+  if (!reviewLimit || currentCount >= reviewLimit) return false;
+  if (isNoiseEmail(email.subject, email.body_text)) return false;
+  const text = `${email.subject || ''}\n${email.body_text || ''}`;
+  const looksRelevant = /alpicois|chalet|semaine|week|reservation|réservation|location|contrat|facture|assurance|acompte|solde|disponib|ski|plagne|janv|févr|mars|avril|dec|déc|2026|2027|2028/i.test(text);
+  if (!looksRelevant) return false;
+
+  return proposeSyncChange(db, {
+    entityType: 'mail_review',
+    entityId: `${email.id}:mailReview`,
+    contactId: email.contact_id,
+    label: `Mail à qualifier — ${email.contact_name}`,
+    field: 'mailReview',
+    proposed: 'Revoir ce mail et confirmer si une action est nécessaire',
+    emailId: email.id,
+    emailSubject: email.subject,
+    emailExcerpt: String(email.body_text || '').replace(/\s+/g, ' ').slice(0, 220),
+    reviewReason: reason,
+    checkIn: dates?.checkIn || null,
+    checkOut: dates?.checkOut || null,
+  });
 }
 
 function findDatesFromContact(db, contactId) {
@@ -232,7 +286,9 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
     if (approved) {
       const checkIn = payload.checkIn;
       const checkOut = payload.checkOut;
-      if (row.entity_type === 'stay_progress' || payload.field in PROGRESS_LABELS) {
+      if (row.entity_type === 'mail_review') {
+        // Manual review proposals only mark the email as handled in audit history.
+      } else if (row.entity_type === 'stay_progress' || payload.field in PROGRESS_LABELS) {
         if (checkIn && checkOut) {
           const patch = payload.field === 'mailSteps'
             ? { mailSteps: payload.proposed }

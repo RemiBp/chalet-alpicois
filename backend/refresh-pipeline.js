@@ -52,7 +52,11 @@ export async function runRefreshPipeline(db, opts = {}) {
 
   report.dedupe = dedupeOverlappingBookings(db);
 
-  report.proposals = scanEmailsForProposals(db, { sinceDays: quick ? 45 : 120, limit: quick ? 200 : 800 });
+  report.proposals = scanEmailsForProposals(db, {
+    sinceDays: quick ? 45 : 120,
+    limit: quick ? 200 : 800,
+    reviewLimit: quick ? 25 : 0,
+  });
 
   if (opts.skipAi) {
     report.aiReconcile = { skipped: true, reason: 'skipAi' };

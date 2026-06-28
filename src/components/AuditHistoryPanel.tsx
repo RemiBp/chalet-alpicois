@@ -196,8 +196,24 @@ export default function AuditHistoryPanel({
                 </div>
                 {entry.payload?.field != null && (
                   <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                    <strong style={{ color: 'var(--text-primary)' }}>Mise à jour souhaitée :</strong>{' '}
+                    <strong style={{ color: 'var(--text-primary)' }}>
+                      {entry.payload.field === 'mailReview' ? 'Proposition proposée :' : 'Mise à jour souhaitée :'}
+                    </strong>{' '}
                     {friendlyField(String(entry.payload.field))} → {friendlyValue(entry.payload.proposed)}
+                  </div>
+                )}
+                {entry.payload?.reviewReason != null && (
+                  <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Pourquoi : {String(entry.payload.reviewReason)}
+                  </div>
+                )}
+                {entry.payload?.emailExcerpt != null && (
+                  <div style={{
+                    marginTop: 8, padding: '8px 10px', borderRadius: 8,
+                    background: 'var(--bg-body)', border: '1px solid var(--border-subtle)',
+                    fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5,
+                  }}>
+                    {String(entry.payload.emailExcerpt)}
                   </div>
                 )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', fontSize: 11, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.45 }}>
@@ -291,6 +307,7 @@ function friendlyField(field: string) {
     balanceInvoiceSent: 'Facture solde envoyée',
     contractSent: 'Contrat envoyé',
     mailSteps: 'Étape mail',
+    mailReview: 'Revue du mail',
   };
   return m[field] || field;
 }
