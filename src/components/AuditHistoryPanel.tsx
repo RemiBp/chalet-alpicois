@@ -201,7 +201,8 @@ export default function AuditHistoryPanel({
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.45 }}>
                   {entry.payload?.field != null && <>Champ : {friendlyField(String(entry.payload.field))} · </>}
                   {entry.payload?.proposed != null && <>Proposé : {friendlyValue(entry.payload.proposed)} · </>}
-                  {entry.payload?.emailSubject != null && <>Mail : {String(entry.payload.emailSubject).slice(0, 60)} · </>}
+                  {entry.payload?.emailSubject != null && <>Mail : {String(entry.payload.emailSubject).slice(0, 80)} · </>}
+                  {entry.payload?.emailId != null && <>ID mail : {String(entry.payload.emailId)} · </>}
                   {entry.payload?.checkIn != null && <>Séjour : {String(entry.payload.checkIn)} → {String(entry.payload.checkOut || '')} · </>}
                   {entry.payload?.mails != null && <>{String(entry.payload.mails)} mail(s) · </>}
                   {entry.payload?.signals != null && <>{String(entry.payload.signals)} statut(s) · </>}

@@ -1,4 +1,4 @@
-import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, Euro, History, AlertTriangle, Database, Eye, EyeOff } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, Euro, History, AlertTriangle, Database, Eye, EyeOff, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { fetchApiHealth, fetchStaticDataMeta, getLastDataSource, markDataSourceLive, type ApiHealth, type StaticDataMeta } from '../data';
@@ -61,6 +61,8 @@ export default function Layout({
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [staticMeta, setStaticMeta] = useState<StaticDataMeta | null>(null);
   const [usingStatic, setUsingStatic] = useState(false);
+  const [globalSyncing, setGlobalSyncing] = useState(false);
+  const [globalSyncMsg, setGlobalSyncMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loginOpen) {
@@ -79,6 +81,31 @@ export default function Layout({
     setUsingStatic(getLastDataSource() === 'static');
     return () => window.clearInterval(id);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const onStart = () => {
+      setGlobalSyncing(true);
+      setGlobalSyncMsg('Synchronisation des derniers mails en cours…');
+    };
+    const onComplete = (event: Event) => {
+      const report = (event as CustomEvent).detail || {};
+      setGlobalSyncing(false);
+      setGlobalSyncMsg(`Sync terminée — ${report.imap?.totalSynced ?? 0} nouveau(x) mail(s), ${report.pendingCount ?? 0} proposition(s) à vérifier.`);
+      navigate(`${routes.historique}?sync=1`);
+    };
+    const onError = (event: Event) => {
+      setGlobalSyncing(false);
+      setGlobalSyncMsg(`Erreur sync — ${(event as CustomEvent).detail || 'à vérifier'}`);
+    };
+    window.addEventListener('alpicois-sync-start', onStart);
+    window.addEventListener('alpicois-sync-complete', onComplete);
+    window.addEventListener('alpicois-sync-error', onError);
+    return () => {
+      window.removeEventListener('alpicois-sync-start', onStart);
+      window.removeEventListener('alpicois-sync-complete', onComplete);
+      window.removeEventListener('alpicois-sync-error', onError);
+    };
+  }, [navigate]);
 
   return (
     <div style={{ display: 'flex', width: '100%', minHeight: '100vh' }}>
@@ -276,10 +303,30 @@ export default function Layout({
             MODE ADMIN — {adminActor === 'claire' ? 'Claire' : 'Gilles'} — Les écritures sont enregistrées sur le serveur{health?.blob ? ' (Blob actif)' : ' — ⚠ Blob non connecté, risque de perte'}.
           </div>
         )}
-        {(health === null || (usingStatic && health?.ok)) && (
+        {isAdmin && (globalSyncing || globalSyncMsg) && (
           <div style={{
             position: 'sticky',
             top: isAdmin ? 28 : 0,
+            zIndex: 99,
+            background: globalSyncing ? '#ecfeff' : '#ecfdf5',
+            borderBottom: `1px solid ${globalSyncing ? '#67e8f9' : '#86efac'}`,
+            padding: '7px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            fontSize: 11,
+            color: globalSyncing ? '#0e7490' : '#047857',
+            fontWeight: 600,
+          }}>
+            {globalSyncing ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+            {globalSyncMsg}
+          </div>
+        )}
+        {(health === null || (usingStatic && health?.ok)) && (
+          <div style={{
+            position: 'sticky',
+            top: isAdmin ? (globalSyncing || globalSyncMsg ? 56 : 28) : 0,
             zIndex: 99,
             background: health === null ? '#fef3c7' : '#fffbeb',
             borderBottom: `1px solid ${health === null ? '#fcd34d' : '#fde68a'}`,

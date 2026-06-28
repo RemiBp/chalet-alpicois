@@ -1086,23 +1086,37 @@ export interface RefreshReport {
 
 let refreshInflight: Promise<RefreshReport> | null = null;
 
+function emitRefreshEvent(name: 'start' | 'complete' | 'error', detail?: unknown) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(`alpicois-sync-${name}`, { detail }));
+}
+
+async function runDataRefresh(skipImap: boolean): Promise<RefreshReport> {
+  const res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
+    method: 'POST',
+    body: JSON.stringify({ skipImap, fullSync: false }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Refresh ${res.status}`);
+  }
+  invalidateContactsCache();
+  const report = await res.json() as RefreshReport;
+  emitRefreshEvent('complete', report);
+  return report;
+}
+
 export async function triggerDataRefresh(skipImap = false): Promise<RefreshReport> {
   if (refreshInflight) return refreshInflight;
-  refreshInflight = (async () => {
-    const res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
-      method: 'POST',
-      body: JSON.stringify({ skipImap, fullSync: false }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error((err as { error?: string }).error || `Refresh ${res.status}`);
-    }
-    invalidateContactsCache();
-    return res.json() as Promise<RefreshReport>;
-  })().finally(() => {
+  emitRefreshEvent('start', { skipImap });
+  const request: Promise<RefreshReport> = runDataRefresh(skipImap).catch(err => {
+    emitRefreshEvent('error', err instanceof Error ? err.message : String(err));
+    throw err;
+  }).finally(() => {
     refreshInflight = null;
   });
-  return refreshInflight;
+  refreshInflight = request;
+  return request;
 }
 
 export async function updateRequestedWeek(
