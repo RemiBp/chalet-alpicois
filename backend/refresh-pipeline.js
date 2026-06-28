@@ -18,10 +18,11 @@ import { seedProgressFromExcel } from './stay-progress.js';
 
 /**
  * @param {import('better-sqlite3').Database} db
- * @param {{ skipImap?: boolean, fullSync?: boolean, skipAi?: boolean }} opts
+ * @param {{ skipImap?: boolean, fullSync?: boolean, skipAi?: boolean, quick?: boolean, maxMessagesPerMailbox?: number }} opts
  */
 export async function runRefreshPipeline(db, opts = {}) {
   const started = Date.now();
+  const quick = opts.quick === true;
   const report = {
     ok: true,
     startedAt: new Date().toISOString(),
@@ -33,7 +34,10 @@ export async function runRefreshPipeline(db, opts = {}) {
 
   if (!opts.skipImap) {
     try {
-      report.imap = await runImapSync(db, { full: opts.fullSync });
+      report.imap = await runImapSync(db, {
+        full: opts.fullSync,
+        maxMessagesPerMailbox: opts.maxMessagesPerMailbox,
+      });
     } catch (err) {
       report.imap = { error: err.message };
       console.error('IMAP sync error:', err.message);
@@ -43,12 +47,12 @@ export async function runRefreshPipeline(db, opts = {}) {
   }
 
   report.link = linkOrphanEmails(db);
-  report.profiles = enrichProfilesFromEmails(db, { limit: 400 });
-  report.signals = refreshBookingStatuses(db, { sinceDays: 120, limit: 800 });
+  report.profiles = enrichProfilesFromEmails(db, { limit: quick ? 80 : 400 });
+  report.signals = refreshBookingStatuses(db, { sinceDays: quick ? 45 : 120, limit: quick ? 200 : 800 });
 
   report.dedupe = dedupeOverlappingBookings(db);
 
-  report.proposals = scanEmailsForProposals(db, { sinceDays: 120, limit: 800 });
+  report.proposals = scanEmailsForProposals(db, { sinceDays: quick ? 45 : 120, limit: quick ? 200 : 800 });
 
   if (opts.skipAi) {
     report.aiReconcile = { skipped: true, reason: 'skipAi' };
@@ -63,8 +67,12 @@ export async function runRefreshPipeline(db, opts = {}) {
     }
   }
 
-  // L'Excel tarifs 2026-2027 reste la source de vérité finale pour la saison.
-  report.excelSeed = seedProgressFromExcel(db);
+  if (quick) {
+    report.excelSeed = { skipped: true, reason: 'quick' };
+  } else {
+    // L'Excel tarifs 2026-2027 reste la source de vérité finale pour la saison.
+    report.excelSeed = seedProgressFromExcel(db);
+  }
 
   report.durationMs = Date.now() - started;
   return report;

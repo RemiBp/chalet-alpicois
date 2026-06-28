@@ -11,9 +11,11 @@ function uidKey(mailbox) {
 
 /**
  * @param {import('better-sqlite3').Database} db
- * @param {{ full?: boolean }} opts
+ * @param {{ full?: boolean, maxMessages?: number }} opts
  */
-async function syncMailbox(db, client, mailboxPath, full = false) {
+async function syncMailbox(db, client, mailboxPath, opts = {}) {
+  const full = opts.full === true;
+  const maxMessages = Number.isFinite(opts.maxMessages) ? Math.max(1, opts.maxMessages) : Infinity;
   let totalMessages = 0;
   try {
     const status = await client.status(mailboxPath, { messages: true });
@@ -55,6 +57,7 @@ async function syncMailbox(db, client, mailboxPath, full = false) {
       uid: true, envelope: true, flags: true, internalDate: true,
     }, { uid: true })) {
       messages.push(msg);
+      if (messages.length >= maxMessages) break;
     }
 
     for (const meta of messages) {
@@ -110,7 +113,7 @@ async function syncMailbox(db, client, mailboxPath, full = false) {
 
 /**
  * @param {import('better-sqlite3').Database} db
- * @param {{ full?: boolean, mailboxes?: string[] }} opts
+ * @param {{ full?: boolean, mailboxes?: string[], maxMessagesPerMailbox?: number }} opts
  */
 export async function runImapSync(db, opts = {}) {
   const user = process.env.EMAIL_USER || '';
@@ -146,7 +149,10 @@ export async function runImapSync(db, opts = {}) {
       } catch { /* ignore list failure */ }
     }
     for (const box of boxes) {
-      results.push(await syncMailbox(db, client, box, opts.full));
+      results.push(await syncMailbox(db, client, box, {
+        full: opts.full,
+        maxMessages: opts.maxMessagesPerMailbox,
+      }));
     }
   } finally {
     try { await client.logout(); } catch { /* ignore */ }

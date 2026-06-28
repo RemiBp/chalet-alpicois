@@ -347,6 +347,8 @@ app.get('/api/cron/refresh', async (req, res) => {
       skipImap: req.query?.skipImap === '1',
       fullSync: req.query?.fullSync === '1',
       skipAi: req.query?.skipAi === '1',
+      quick: req.query?.quick === '1',
+      maxMessagesPerMailbox: req.query?.maxMessagesPerMailbox ? Number(req.query.maxMessagesPerMailbox) : undefined,
     }, {
       actor: 'automatic',
       payload: {
@@ -370,6 +372,8 @@ app.post('/api/cron/refresh', async (req, res) => {
       skipImap: req.body?.skipImap === true,
       fullSync: req.body?.fullSync === true,
       skipAi: req.body?.skipAi === true,
+      quick: req.body?.quick === true,
+      maxMessagesPerMailbox: Number.isFinite(req.body?.maxMessagesPerMailbox) ? Number(req.body.maxMessagesPerMailbox) : undefined,
     }, {
       actor: actor === 'automatic' ? 'automatic' : actor,
     });

@@ -1134,7 +1134,13 @@ function emitRefreshEvent(name: 'start' | 'complete' | 'error', detail?: unknown
 async function runDataRefresh(skipImap: boolean): Promise<RefreshReport> {
   const res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
     method: 'POST',
-    body: JSON.stringify({ skipImap, fullSync: false, skipAi: true }),
+    body: JSON.stringify({
+      skipImap,
+      fullSync: false,
+      skipAi: true,
+      quick: true,
+      maxMessagesPerMailbox: 25,
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
