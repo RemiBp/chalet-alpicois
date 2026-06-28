@@ -17,9 +17,11 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
   const full = opts.full === true;
   const maxMessages = Number.isFinite(opts.maxMessages) ? Math.max(1, opts.maxMessages) : Infinity;
   let totalMessages = 0;
+  let uidNext = null;
   try {
-    const status = await client.status(mailboxPath, { messages: true });
+    const status = await client.status(mailboxPath, { messages: true, uidNext: true });
     totalMessages = status.messages;
+    uidNext = status.uidNext;
   } catch {
     return { mailbox: mailboxPath, synced: 0, errors: 0, skipped: true };
   }
@@ -34,6 +36,9 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
   const lastUidStr = db.prepare('SELECT value FROM sync_state WHERE key = ?').get(key);
   const lastUid = full ? 0 : (lastUidStr ? parseInt(lastUidStr.value, 10) : 0);
   const sinceUid = lastUid + 1;
+  if (!full && uidNext && sinceUid >= uidNext) {
+    return { mailbox: mailboxPath, synced: 0, errors: 0, alreadyCurrent: true, lastUid, uidNext };
+  }
 
   let lock;
   try {

@@ -1096,6 +1096,8 @@ export interface StoredRefreshState {
 
 let refreshInflight: Promise<RefreshReport> | null = null;
 const REFRESH_STATE_KEY = 'alpicois-refresh-state';
+const REFRESH_TIMEOUT_MS = 70000;
+const REFRESH_STALE_MS = 120000;
 
 function readStoredRefreshState(): StoredRefreshState | null {
   if (typeof window === 'undefined') return null;
@@ -1117,7 +1119,19 @@ function writeStoredRefreshState(state: StoredRefreshState): void {
 }
 
 export function readRefreshState(): StoredRefreshState | null {
-  return readStoredRefreshState();
+  const state = readStoredRefreshState();
+  if (!state) return null;
+  if (state.status === 'running' && Date.now() - state.startedAt > REFRESH_STALE_MS) {
+    const stale: StoredRefreshState = {
+      ...state,
+      status: 'error',
+      completedAt: Date.now(),
+      error: 'Synchronisation interrompue ou expirée — relancez une sync des derniers mails.',
+    };
+    writeStoredRefreshState(stale);
+    return stale;
+  }
+  return state;
 }
 
 export function markRefreshStateHandled(): void {
@@ -1132,16 +1146,29 @@ function emitRefreshEvent(name: 'start' | 'complete' | 'error', detail?: unknown
 }
 
 async function runDataRefresh(skipImap: boolean): Promise<RefreshReport> {
-  const res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
-    method: 'POST',
-    body: JSON.stringify({
-      skipImap,
-      fullSync: false,
-      skipAi: true,
-      quick: true,
-      maxMessagesPerMailbox: 25,
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await apiAuthFetch(`${API_BASE}/cron/refresh`, {
+      method: 'POST',
+      signal: controller.signal,
+      body: JSON.stringify({
+        skipImap,
+        fullSync: false,
+        skipAi: true,
+        quick: true,
+        maxMessagesPerMailbox: 25,
+      }),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Synchronisation expirée — relancez une sync des derniers mails.');
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || `Refresh ${res.status}`);
