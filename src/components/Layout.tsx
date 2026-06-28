@@ -63,6 +63,7 @@ export default function Layout({
   const [usingStatic, setUsingStatic] = useState(false);
   const [globalSyncing, setGlobalSyncing] = useState(false);
   const [globalSyncMsg, setGlobalSyncMsg] = useState<string | null>(null);
+  const [globalSyncPendingCount, setGlobalSyncPendingCount] = useState(0);
   const syncHandledRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -92,11 +93,13 @@ export default function Layout({
       if (state.status === 'running') {
         setGlobalSyncing(true);
         setGlobalSyncMsg('Synchronisation des derniers mails en cours…');
+        setGlobalSyncPendingCount(0);
         return;
       }
       setGlobalSyncing(false);
       if (state.status === 'complete') {
         setGlobalSyncMsg(describeComplete(state.report));
+        setGlobalSyncPendingCount(state.report?.pendingCount ?? 0);
         if (!state.handledAt && syncHandledRef.current !== state.completedAt) {
           syncHandledRef.current = state.completedAt || Date.now();
           markRefreshStateHandled();
@@ -109,17 +112,20 @@ export default function Layout({
     const onStart = () => {
       setGlobalSyncing(true);
       setGlobalSyncMsg('Synchronisation des derniers mails en cours…');
+      setGlobalSyncPendingCount(0);
     };
     const onComplete = (event: Event) => {
       const report = (event as CustomEvent).detail || {};
       setGlobalSyncing(false);
       setGlobalSyncMsg(describeComplete(report));
+      setGlobalSyncPendingCount(report.pendingCount ?? 0);
       syncHandledRef.current = Date.now();
       markRefreshStateHandled();
       navigate(`${routes.historique}?sync=1`);
     };
     const onError = (event: Event) => {
       setGlobalSyncing(false);
+      setGlobalSyncPendingCount(0);
       setGlobalSyncMsg(`Erreur sync — ${(event as CustomEvent).detail || 'à vérifier'}`);
     };
     window.addEventListener('alpicois-sync-start', onStart);
@@ -343,12 +349,36 @@ export default function Layout({
             alignItems: 'center',
             justifyContent: 'center',
             gap: 8,
+            flexWrap: 'wrap',
             fontSize: 11,
             color: globalSyncing ? '#0e7490' : '#047857',
             fontWeight: 600,
           }}>
             {globalSyncing ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
             {globalSyncMsg}
+            {!globalSyncing && globalSyncPendingCount > 0 && (
+              <button
+                type="button"
+                onClick={() => navigate(`${routes.historique}?sync=1`)}
+                style={{
+                  marginLeft: 4,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 10px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(5,150,105,0.28)',
+                  background: 'white',
+                  color: '#047857',
+                  fontSize: 11,
+                  fontWeight: 750,
+                  cursor: 'pointer',
+                }}
+              >
+                <CheckCircle2 size={12} />
+                Valider maintenant
+              </button>
+            )}
           </div>
         )}
         {(health === null || (usingStatic && health?.ok)) && (
