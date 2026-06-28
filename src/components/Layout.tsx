@@ -85,9 +85,13 @@ export default function Layout({
   }, [location.pathname]);
 
   useEffect(() => {
-    const describeComplete = (report: StoredRefreshState['report']) => (
-      `Sync terminée — ${report?.imap?.totalSynced ?? 0} nouveau(x) mail(s), ${report?.pendingCount ?? 0} proposition(s) à vérifier.`
-    );
+    const describeComplete = (report: StoredRefreshState['report']) => {
+      const mails = report?.imap?.totalSynced ?? 0;
+      const pending = report?.pendingCount ?? 0;
+      return pending > 0
+        ? `Sync terminée — ${mails} nouveau(x) mail(s), ${pending} proposition(s) à vérifier.`
+        : `Sync terminée — ${mails} nouveau(x) mail(s), aucune proposition à valider.`;
+    };
     const applyState = (state: StoredRefreshState | null) => {
       if (!state) return;
       if (state.status === 'running') {
