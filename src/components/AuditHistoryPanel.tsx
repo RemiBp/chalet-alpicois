@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, User, Bot, RefreshCw, Check, X, Mail, CalendarDays } from 'lucide-react';
+import { Loader2, User, Bot, RefreshCw, Check, X, Mail, CalendarDays, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   fetchAuditLog, resolveAuditProposals, type AuditEntry,
 } from '../data';
@@ -64,6 +64,7 @@ export default function AuditHistoryPanel({
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const load = () => {
     setLoading(true);
@@ -165,7 +166,23 @@ export default function AuditHistoryPanel({
           const Icon = actorIcon(entry.actor);
           const color = entry.actor === 'gilles' ? '#2563eb' : entry.actor === 'claire' ? '#7c3aed' : '#6b7280';
           const isPending = entry.validationStatus === 'pending';
-          const showDecisionButtons = isPending && filter === 'automatic';
+          const isProposal = entry.action === 'sync_proposal';
+          const showDecisionButtons = isProposal && (filter === 'automatic' || filter === 'all');
+          const isExpanded = expanded[entry.id] ?? (isPending && filter === 'automatic');
+          const statusLabel = entry.validationStatus === 'approved'
+            ? 'Validé'
+            : entry.validationStatus === 'rejected'
+              ? 'Refusé'
+              : isPending
+                ? 'Automatique à valider'
+                : actorLabel(entry.actor);
+          const statusColor = entry.validationStatus === 'approved'
+            ? '#059669'
+            : entry.validationStatus === 'rejected'
+              ? '#dc2626'
+              : isPending
+                ? 'var(--brand)'
+                : color;
 
           return (
             <div key={entry.id} style={{
@@ -180,21 +197,35 @@ export default function AuditHistoryPanel({
               }}>
                 <Icon size={16} color={isPending ? 'var(--brand)' : color} />
               </div>
-              <div>
+              <div
+                role={isProposal ? 'button' : undefined}
+                tabIndex={isProposal ? 0 : undefined}
+                onClick={() => isProposal && setExpanded(v => ({ ...v, [entry.id]: !isExpanded }))}
+                onKeyDown={e => {
+                  if (isProposal && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault();
+                    setExpanded(v => ({ ...v, [entry.id]: !isExpanded }));
+                  }
+                }}
+                style={{ cursor: isProposal ? 'pointer' : 'default' }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {isProposal && (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
                   <div style={{ fontSize: 13, fontWeight: 750, color: 'var(--text-primary)' }}>
                     {proposalLabel(entry)}
                   </div>
-                  {isPending && (
+                  {isProposal && (
                     <span style={{
-                      fontSize: 10, fontWeight: 700, color: 'var(--brand)', background: 'var(--brand-dim)',
-                      border: '1px solid var(--brand-border)', borderRadius: 999, padding: '2px 8px',
+                      fontSize: 10, fontWeight: 700, color: statusColor,
+                      background: isPending ? 'var(--brand-dim)' : 'var(--bg-body)',
+                      border: `1px solid ${isPending ? 'var(--brand-border)' : 'var(--border-color)'}`,
+                      borderRadius: 999, padding: '2px 8px',
                     }}>
-                      Automatique à valider
+                      {statusLabel}
                     </span>
                   )}
                 </div>
-                {entry.payload?.field != null && (
+                {isExpanded && entry.payload?.field != null && (
                   <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                     <strong style={{ color: 'var(--text-primary)' }}>
                       {entry.payload.field === 'mailReview' ? 'Proposition proposée :' : 'Mise à jour souhaitée :'}
@@ -202,12 +233,12 @@ export default function AuditHistoryPanel({
                     {friendlyField(String(entry.payload.field))} → {friendlyValue(entry.payload.proposed)}
                   </div>
                 )}
-                {entry.payload?.reviewReason != null && (
+                {isExpanded && entry.payload?.reviewReason != null && (
                   <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                     Pourquoi : {String(entry.payload.reviewReason)}
                   </div>
                 )}
-                {entry.payload?.emailExcerpt != null && (
+                {isExpanded && entry.payload?.emailExcerpt != null && (
                   <div style={{
                     marginTop: 8, padding: '8px 10px', borderRadius: 8,
                     background: 'var(--bg-body)', border: '1px solid var(--border-subtle)',
@@ -234,7 +265,7 @@ export default function AuditHistoryPanel({
                 </div>
                 <div style={{ marginTop: 8 }}>
                   {entry.contactId && (
-                    <button type="button" onClick={() => navigate(routes.client(entry.contactId))}
+                    <button type="button" onClick={e => { e.stopPropagation(); navigate(routes.client(entry.contactId)); }}
                       style={{ border: 'none', background: 'transparent', color: 'var(--brand)', fontSize: 11, fontWeight: 750, cursor: 'pointer', padding: 0 }}>
                       ouvrir la fiche
                     </button>
@@ -251,7 +282,7 @@ export default function AuditHistoryPanel({
                       background: '#059669', color: 'white', fontSize: 11, fontWeight: 750,
                     }}>
                     <Check size={14} />
-                    Valider
+                    {entry.validationStatus === 'approved' ? 'Validé' : 'Valider'}
                   </button>
                   <button type="button" disabled={submitting} onClick={() => resolveOne(entry, false)}
                     style={{
@@ -261,14 +292,14 @@ export default function AuditHistoryPanel({
                       color: '#dc2626', fontSize: 11, fontWeight: 750,
                     }}>
                     <X size={14} />
-                    Refuser
+                    {entry.validationStatus === 'rejected' ? 'Refusé' : 'Refuser'}
                   </button>
                 </div>
               ) : (
                 <div style={{ textAlign: 'right', fontSize: 10, color: 'var(--text-muted)' }}>
-                  <div style={{ fontWeight: 600, color }}>{actorLabel(entry.actor)}</div>
-                  {isPending && (
-                    <div style={{ color: 'var(--brand)', fontWeight: 700, marginTop: 2 }}>Automatique à valider</div>
+                  <div style={{ fontWeight: 600, color: statusColor }}>{statusLabel}</div>
+                  {isProposal && !isPending && (
+                    <div style={{ color: 'var(--text-muted)', fontWeight: 600, marginTop: 2 }}>modulable dans Tout</div>
                   )}
                   <div style={{ marginTop: 4 }}>{fmtDate(entry.createdAt)}</div>
                 </div>

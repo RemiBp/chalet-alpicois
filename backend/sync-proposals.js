@@ -276,8 +276,8 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
 
   for (const { id, approved } of decisions) {
     const row = db.prepare('SELECT * FROM audit_log WHERE id = ?').get(id);
-    if (!row || row.validation_status !== 'pending') {
-      results.push({ id, ok: false, reason: 'not_pending' });
+    if (!row || row.action !== 'sync_proposal') {
+      results.push({ id, ok: false, reason: 'not_sync_proposal' });
       continue;
     }
 
@@ -307,10 +307,10 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
         upsertStayProgress(db, row.contact_id, checkIn, checkOut, { balanceInvoiceNumber: 'envoyée' });
       }
       db.prepare("UPDATE audit_log SET validation_status = 'approved' WHERE id = ?").run(id);
-      results.push({ id, ok: true, status: 'approved' });
+      results.push({ id, ok: true, status: 'approved', previousStatus: row.validation_status });
     } else {
       db.prepare("UPDATE audit_log SET validation_status = 'rejected' WHERE id = ?").run(id);
-      results.push({ id, ok: true, status: 'rejected' });
+      results.push({ id, ok: true, status: 'rejected', previousStatus: row.validation_status });
     }
   }
 

@@ -309,24 +309,59 @@ export default function CalendarView({ isAdmin = false }: {
         )}
 
         {ev.confirmationEmail ? (
-          <div style={{ borderRadius: 10, border: '1px solid var(--border-subtle)', overflow: 'hidden' }}>
-            <div style={{ padding: '10px 14px', background: 'var(--bg-body)', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <Mail size={14} color="var(--brand)" />
-                <span style={{ fontSize: 12, fontWeight: 600 }}>{ev.confirmationEmail.subject}</span>
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                {ev.confirmationEmail.senderName} · {fmtMailDate(ev.confirmationEmail.date)}
-                {ev.confirmationEmail.signalLabel && (
-                  <span style={{ marginLeft: 8, fontWeight: 600, color: '#2563eb' }}>{ev.confirmationEmail.signalLabel}</span>
-                )}
+          <div style={{ borderRadius: 10, border: '1px solid var(--border-color)', overflow: 'hidden', background: 'var(--bg-surface)' }}>
+            <div style={{
+              padding: '12px 14px',
+              background: 'linear-gradient(180deg, rgba(13,148,136,0.08), var(--bg-body))',
+              borderBottom: '1px solid var(--border-subtle)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                    <Mail size={15} color="var(--brand)" />
+                    <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--brand)', textTransform: 'uppercase' }}>Mail de preuve</span>
+                    {ev.confirmationEmail.signalLabel && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, color: '#1d4ed8',
+                        background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.18)',
+                        borderRadius: 999, padding: '2px 7px',
+                      }}>
+                        {ev.confirmationEmail.signalLabel}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 750, color: 'var(--text-primary)', lineHeight: 1.35 }}>
+                    {ev.confirmationEmail.subject || '(Sans sujet)'}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
+                    {ev.confirmationEmail.senderName || 'Expéditeur inconnu'} · {fmtMailDate(ev.confirmationEmail.date)}
+                  </div>
+                </div>
               </div>
             </div>
-            <div style={{
-              padding: '12px 14px', fontSize: 12, lineHeight: 1.55, whiteSpace: 'pre-wrap',
-              maxHeight: 360, overflowY: 'auto', color: 'var(--text-secondary)',
-            }}>
-              {safeEmailBodyPreview(ev.confirmationEmail.bodyText || ev.confirmationEmail.bodyPreview || '', 2000)}
+            <div style={{ padding: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>
+                Extrait nettoyé
+              </div>
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                background: 'var(--bg-body)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: 12,
+                lineHeight: 1.6,
+                whiteSpace: 'pre-wrap',
+                maxHeight: 260,
+                overflowY: 'auto',
+                color: 'var(--text-secondary)',
+              }}>
+                {safeEmailBodyPreview(ev.confirmationEmail.bodyText || ev.confirmationEmail.bodyPreview || '', 2000)}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                  Cette preuve alimente le statut calendrier et le suivi administratif.
+                </span>
+              </div>
             </div>
           </div>
         ) : (
