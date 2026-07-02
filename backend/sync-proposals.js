@@ -21,6 +21,9 @@ const PROGRESS_LABELS = {
   depositGuaranteePaid: 'Caution reçue',
   depositGuaranteeReturned: 'Caution rendue',
   mailReview: 'Mail à qualifier',
+  phone: 'Téléphone',
+  address: 'Adresse',
+  groupComposition: 'Composition du groupe',
 };
 
 export function countPendingProposals(db) {
@@ -150,7 +153,7 @@ export function scanEmailsForProposals(db, opts = {}) {
   since.setDate(since.getDate() - sinceDays);
 
   const emails = db.prepare(`
-    SELECT e.*, c.name AS contact_name
+    SELECT e.*, c.name AS contact_name, c.phone AS contact_phone, c.address AS contact_address, c.profile_json AS contact_profile_json
     FROM emails e
     JOIN contacts c ON c.id = e.contact_id
     WHERE e.contact_id IS NOT NULL AND e.date >= ? AND e.body_text != ''
@@ -164,21 +167,47 @@ export function scanEmailsForProposals(db, opts = {}) {
   for (const email of emails) {
     const cleanBody = cleanStoredBodyText(email.body_text || '');
     const cleanEmail = { ...email, body_text: cleanBody };
-    const hints = detectProgressHints(email.subject, cleanBody, email.mailbox);
+    const hints = [
+      ...detectProgressHints(email.subject, cleanBody, email.mailbox),
+      ...detectContactHints(cleanEmail),
+    ];
     const dates = extractInquiryBest(`${email.subject}\n${cleanBody}`, email.date)
       || findDatesFromContact(db, email.contact_id);
 
+    let createdForEmail = 0;
+    const contactHints = hints.filter(h => h.field === 'phone' || h.field === 'address' || h.field === 'groupComposition');
+    for (const hint of contactHints) {
+      if (proposeSyncChange(db, {
+        entityType: 'contact_profile',
+        entityId: `${email.contact_id}:${hint.field}:${email.id}`,
+        contactId: email.contact_id,
+        label: `${hint.label} — ${email.contact_name}`,
+        field: hint.field,
+        proposed: hint.proposed,
+        emailId: email.id,
+        emailSubject: email.subject,
+        emailExcerpt: cleanBody.replace(/\s+/g, ' ').slice(0, 220),
+        reviewReason: 'Information client détectée dans le mail',
+        checkIn: dates?.checkIn || null,
+        checkOut: dates?.checkOut || null,
+      })) {
+        proposals++;
+        createdForEmail++;
+      }
+    }
+
     if (!dates?.checkIn) {
-      reviewProposals += proposeMailReviewIfUseful(db, cleanEmail, {
-        reviewLimit,
-        currentCount: reviewProposals,
-        reason: 'Mail client sans séjour identifié automatiquement',
-      }) ? 1 : 0;
+      if (createdForEmail === 0) {
+        reviewProposals += proposeMailReviewIfUseful(db, cleanEmail, {
+          reviewLimit,
+          currentCount: reviewProposals,
+          reason: 'Mail client sans séjour identifié automatiquement',
+        }) ? 1 : 0;
+      }
       continue;
     }
 
-    let createdForEmail = 0;
-    for (const hint of hints) {
+    for (const hint of hints.filter(h => !contactHints.includes(h))) {
       if (hint.field === 'depositInvoiceSent' || hint.field === 'contractSent' || hint.field === 'balanceInvoiceSent') {
         if (proposeSyncChange(db, {
           entityType: 'mail_sent',
@@ -272,6 +301,39 @@ function suggestedReviewAction(text) {
   return `Vérifier et rattacher : ${[...new Set(suggestions)].join(', ')}`;
 }
 
+function detectContactHints(email) {
+  const text = `${email.subject || ''}\n${email.body_text || ''}`;
+  const hints = [];
+  const phone = text.match(/(?:phone|t[eé]l(?:[ée]phone)?|mobile|portable)\s*(?:number|n°|:|-)?\s*([+0-9][0-9\s().-]{7,})/i)?.[1]
+    || text.match(/\b(00\d{8,}|(?:\+\d{1,3}\s*)?\d[\d\s().-]{8,})\b/)?.[1];
+  const cleanPhone = phone?.replace(/\s+/g, ' ').trim();
+  if (cleanPhone && !String(email.contact_phone || '').replace(/\s+/g, '').includes(cleanPhone.replace(/\s+/g, ''))) {
+    hints.push({ field: 'phone', proposed: cleanPhone, label: 'Téléphone à ajouter' });
+  }
+
+  const address = text.match(/(?:home\s+address|adresse|address)\s*[:\-]?\s*([^\n]{10,140})/i)?.[1]?.trim();
+  if (address && !String(email.contact_address || '').toLowerCase().includes(address.toLowerCase().slice(0, 16))) {
+    hints.push({ field: 'address', proposed: address, label: 'Adresse à ajouter' });
+  }
+
+  const adults = text.match(/(\d+)\s*(?:adultes?|adults?)/i)?.[1];
+  const children = text.match(/(\d+)\s*(?:enfants?|children|kids)/i)?.[1];
+  if (adults || children) {
+    let profile = {};
+    try { profile = JSON.parse(email.contact_profile_json || '{}'); } catch { /* ignore */ }
+    const proposed = {
+      typicalAdults: adults ? parseInt(adults, 10) : Number(profile.typicalAdults || 0),
+      typicalChildren: children ? parseInt(children, 10) : Number(profile.typicalChildren || 0),
+    };
+    if ((proposed.typicalAdults && proposed.typicalAdults !== Number(profile.typicalAdults || 0))
+      || (proposed.typicalChildren && proposed.typicalChildren !== Number(profile.typicalChildren || 0))) {
+      hints.push({ field: 'groupComposition', proposed, label: 'Composition du groupe à ajouter' });
+    }
+  }
+
+  return hints;
+}
+
 function findDatesFromContact(db, contactId) {
   const week = db.prepare(`
     SELECT check_in, check_out FROM requested_weeks
@@ -304,6 +366,8 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
       const checkOut = payload.checkOut;
       if (row.entity_type === 'mail_review') {
         // Manual review proposals only mark the email as handled in audit history.
+      } else if (row.entity_type === 'contact_profile') {
+        applyContactProfileProposal(db, row.contact_id, payload);
       } else if (row.entity_type === 'stay_progress' || payload.field in PROGRESS_LABELS) {
         if (checkIn && checkOut) {
           const patch = payload.field === 'mailSteps'
@@ -344,6 +408,39 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
   });
 
   return results;
+}
+
+function applyContactProfileProposal(db, contactId, payload) {
+  if (!contactId) return;
+  if (payload.field === 'phone' && payload.proposed) {
+    db.prepare(`
+      UPDATE contacts SET phone = COALESCE(NULLIF(phone, ''), ?), updated_at = datetime('now')
+      WHERE id = ?
+    `).run(String(payload.proposed), contactId);
+    return;
+  }
+  if (payload.field === 'address' && payload.proposed) {
+    db.prepare(`
+      UPDATE contacts SET address = COALESCE(NULLIF(address, ''), ?), updated_at = datetime('now')
+      WHERE id = ?
+    `).run(String(payload.proposed), contactId);
+    return;
+  }
+  if (payload.field === 'groupComposition' && payload.proposed && typeof payload.proposed === 'object') {
+    const row = db.prepare('SELECT profile_json FROM contacts WHERE id = ?').get(contactId);
+    let profile = {};
+    try { profile = JSON.parse(row?.profile_json || '{}'); } catch { /* ignore */ }
+    const next = {
+      ...profile,
+      typicalAdults: payload.proposed.typicalAdults || profile.typicalAdults || 0,
+      typicalChildren: payload.proposed.typicalChildren || profile.typicalChildren || 0,
+      extractedAt: new Date().toISOString(),
+    };
+    db.prepare(`
+      UPDATE contacts SET profile_json = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(JSON.stringify(next), contactId);
+  }
 }
 
 export function listPendingProposals(db, limit = 100) {

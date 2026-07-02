@@ -359,12 +359,21 @@ function friendlyField(field: string) {
     contractSent: 'Contrat envoyé',
     mailSteps: 'Étape mail',
     mailReview: 'Revue du mail',
+    phone: 'Téléphone',
+    address: 'Adresse',
+    groupComposition: 'Composition du groupe',
   };
   return m[field] || field;
 }
 
 function friendlyValue(value: unknown) {
   if (typeof value === 'boolean') return value ? 'marquer comme reçu / fait' : 'non';
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (value && typeof value === 'object') {
+    const v = value as { typicalAdults?: number; typicalChildren?: number };
+    if (v.typicalAdults != null || v.typicalChildren != null) {
+      return `${v.typicalAdults || 0} adulte(s), ${v.typicalChildren || 0} enfant(s)`;
+    }
+    return JSON.stringify(value);
+  }
   return readableText(value);
 }
