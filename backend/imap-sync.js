@@ -47,9 +47,26 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
     return { mailbox: mailboxPath, synced: 0, errors: 0, skipped: true };
   }
 
-  const insertEmail = db.prepare(`
-    INSERT OR IGNORE INTO emails (uid, message_id, mailbox, sender, sender_name, recipients, date, subject, body_text, seen, flagged)
+  const upsertEmail = db.prepare(`
+    INSERT INTO emails (uid, message_id, mailbox, sender, sender_name, recipients, date, subject, body_text, seen, flagged)
     VALUES (@uid, @messageId, @mailbox, @sender, @senderName, @recipients, @date, @subject, @bodyText, @seen, @flagged)
+    ON CONFLICT(mailbox, uid) DO UPDATE SET
+      message_id = COALESCE(NULLIF(excluded.message_id, ''), emails.message_id),
+      sender = COALESCE(NULLIF(excluded.sender, ''), emails.sender),
+      sender_name = COALESCE(NULLIF(excluded.sender_name, ''), emails.sender_name),
+      recipients = COALESCE(NULLIF(excluded.recipients, ''), emails.recipients),
+      date = COALESCE(NULLIF(excluded.date, ''), emails.date),
+      subject = COALESCE(NULLIF(excluded.subject, ''), emails.subject),
+      body_text = CASE
+        WHEN length(COALESCE(excluded.body_text, '')) > length(COALESCE(emails.body_text, ''))
+          OR emails.body_text LIKE '%�%'
+          OR emails.body_text LIKE '%Content-Transfer-Encoding:%'
+          OR emails.body_text LIKE '%Content-Type:%'
+        THEN excluded.body_text
+        ELSE emails.body_text
+      END,
+      seen = excluded.seen,
+      flagged = excluded.flagged
   `);
   const updateLastUid = db.prepare('INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)');
 
@@ -86,7 +103,8 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
         const senderAddr = sender?.address || '';
         const bodyText = extractBodyText(sourceBuf);
 
-        const inserted = insertEmail.run({
+        const before = db.prepare('SELECT id FROM emails WHERE mailbox = ? AND uid = ?').get(mailboxPath, meta.uid);
+        upsertEmail.run({
           uid: meta.uid,
           messageId: envelope.messageId || '',
           mailbox: mailboxPath,
@@ -100,7 +118,7 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
           flagged: meta.flags?.has?.('\\Flagged') ? 1 : 0,
         });
 
-        count += inserted.changes;
+        if (!before) count++;
         updateLastUid.run(key, String(meta.uid));
       } catch {
         errors++;

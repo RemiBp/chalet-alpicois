@@ -25,10 +25,25 @@ function decodeQuotedPrintable(str) {
     bytes.push(decoded.charCodeAt(i));
   }
   try {
-    return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
+    return decodeBytesBestEffort(new Uint8Array(bytes));
   } catch {
     return decoded;
   }
+}
+
+function scoreDecodedText(str) {
+  if (!str) return 0;
+  const replacement = (str.match(/\ufffd/g) || []).length * 40;
+  const mojibake = (str.match(/Ã.|Â.|â€|�/g) || []).length * 12;
+  const letters = (str.match(/[A-Za-zÀ-ÿ]{3,}/g) || []).length;
+  const french = (str.match(/[éèêàùçîôûœ]/gi) || []).length * 2;
+  return letters + french - replacement - mojibake;
+}
+
+function decodeBytesBestEffort(bytes) {
+  const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  const latin1 = new TextDecoder('iso-8859-1').decode(bytes);
+  return scoreDecodedText(latin1) > scoreDecodedText(utf8) ? latin1 : utf8;
 }
 
 function fixMojibake(str) {
@@ -36,8 +51,8 @@ function fixMojibake(str) {
   if (str.includes('\ufffd')) {
     try {
       const bytes = Uint8Array.from([...str].map(c => c.charCodeAt(0) & 0xff));
-      const fixed = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-      if (fixed && !fixed.includes('\ufffd')) return fixed;
+      const fixed = decodeBytesBestEffort(bytes);
+      if (fixed && scoreDecodedText(fixed) > scoreDecodedText(str)) return fixed;
     } catch { /* ignore */ }
   }
   return str;
@@ -113,6 +128,17 @@ function cleanBody(str) {
     .replace(/&nbsp;/gi, ' ')
     .replace(/\r\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
+    .replace(/r�servation/gi, 'réservation')
+    .replace(/int�ress�es/gi, 'intéressées')
+    .replace(/int�ress�s/gi, 'intéressés')
+    .replace(/int�ress�/gi, 'intéressé')
+    .replace(/pr�c�dent/gi, 'précédent')
+    .replace(/d�cembre/gi, 'décembre')
+    .replace(/f�vrier/gi, 'février')
+    .replace(/s�jour/gi, 'séjour')
+    .replace(/pi�ce/gi, 'pièce')
+    .replace(/identit�/gi, 'identité')
+    .replace(/t�l/gi, 'tél')
     .trim();
 }
 
@@ -124,12 +150,9 @@ export function extractBodyText(sourceBuffer) {
   try {
     let raw;
     try {
-      raw = new TextDecoder('utf-8', { fatal: false }).decode(sourceBuffer);
+      raw = decodeBytesBestEffort(sourceBuffer);
     } catch {
       raw = sourceBuffer.toString('utf-8');
-    }
-    if (/Ã[©¨ª«¬­®°±²³´µ¶·¸¹º»¼½¾¿À-ÿ]/.test(raw)) {
-      raw = new TextDecoder('latin1').decode(sourceBuffer);
     }
 
     const boundaryMatch = raw.match(/boundary="?([^"\s;]+)"?/i);

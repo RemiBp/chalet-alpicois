@@ -93,16 +93,16 @@ export function detectProgressHints(subject, bodyText, mailbox = 'INBOX') {
   const hints = [];
   const isSent = /sent/i.test(mailbox);
 
-  if (/contrat\s+sign[eé]|signed\s+contract|read\s+and\s+approved|lu\s+et\s+approuv[eé]/i.test(text)) {
+  if (/contrat.{0,80}sign[eé]|sign[eé].{0,80}contrat|signed\s+contract|rental\s+agreement.{0,80}signed|read\s+and\s+approved|lu\s+et\s+approuv[eé]/i.test(text)) {
     hints.push({ field: 'contractSigned', proposed: true, label: 'Contrat signé (mail)' });
   }
   if (/acompte\s+re[cç]u|deposit\s+(?:received|paid)|virement\s+re[cç]u|paiement\s+(?:de\s+l['']?)?acompte/i.test(text)) {
     hints.push({ field: 'depositPaid', proposed: true, label: 'Paiement acompte reçu' });
   }
-  if (/attestation\s+(?:de\s+)?(?:garantie|assurance)|insurance\s+certificate|assurance\s+vill[eé]giature/i.test(text)) {
+  if (/attestation\s+(?:de\s+|d['’])?(?:garantie|assurance)|insurance\s+certificate|assurance\s+vill[eé]giature/i.test(text)) {
     hints.push({ field: 'insuranceReceived', proposed: true, label: 'Assurance villégiature' });
   }
-  if (/(?:pi[eè]ce|piece)\s+d['’]?identit[eé]|passport|identity\s+(?:card|document)|carte\s+d['’]?identit[eé]/i.test(text)) {
+  if (/(?:pi[eè]ce|piece)\s+d['’]?identit[eé]|passeport|passport|identity\s+(?:card|document)|carte\s+d['’]?identit[eé]/i.test(text)) {
     hints.push({ field: 'idReceived', proposed: true, label: "Pièce d'identité reçue" });
   }
   if (/solde\s+(?:re[cç]u|pay[eé]|r[eé]gl[eé])|balance\s+(?:received|paid)/i.test(text)) {
@@ -311,7 +311,11 @@ function detectContactHints(email) {
     hints.push({ field: 'phone', proposed: cleanPhone, label: 'Téléphone à ajouter' });
   }
 
-  const address = text.match(/(?:home\s+address|adresse|address)\s*[:\-]?\s*([^\n]{10,140})/i)?.[1]?.trim();
+  const rawAddress = text.match(/(?:home\s+address|adresse|address)\s*[:\-]?\s*([^\n]{10,180})/i)?.[1]?.trim();
+  const address = rawAddress
+    ?.split(/\b(?:phone|t[eé]l(?:[ée]phone)?|mobile|portable|best\s+wishes|mail)\b/i)[0]
+    ?.replace(/\s+/g, ' ')
+    ?.trim();
   if (address && !String(email.contact_address || '').toLowerCase().includes(address.toLowerCase().slice(0, 16))) {
     hints.push({ field: 'address', proposed: address, label: 'Adresse à ajouter' });
   }
