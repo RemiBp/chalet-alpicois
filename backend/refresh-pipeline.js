@@ -37,6 +37,7 @@ export async function runRefreshPipeline(db, opts = {}) {
       report.imap = await runImapSync(db, {
         full: opts.fullSync,
         maxMessagesPerMailbox: opts.maxMessagesPerMailbox,
+        skipJunk: quick || opts.skipJunk === true,
       });
     } catch (err) {
       report.imap = { error: err.message };

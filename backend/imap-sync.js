@@ -35,9 +35,17 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
   const key = uidKey(mailboxPath);
   const lastUidStr = db.prepare('SELECT value FROM sync_state WHERE key = ?').get(key);
   const lastUid = full ? 0 : (lastUidStr ? parseInt(lastUidStr.value, 10) : 0);
-  const sinceUid = lastUid + 1;
+  let sinceUid = lastUid + 1;
   if (!full && uidNext && sinceUid >= uidNext) {
     return { mailbox: mailboxPath, synced: 0, errors: 0, alreadyCurrent: true, lastUid, uidNext };
+  }
+
+  // Large backlog on a short cron budget: prefer the newest window so July inquiries
+  // are not stuck behind hundreds of older UIDs. Older gaps can be backfilled offline.
+  let skippedBacklog = 0;
+  if (!full && Number.isFinite(maxMessages) && uidNext && sinceUid < uidNext - maxMessages) {
+    skippedBacklog = (uidNext - maxMessages) - sinceUid;
+    sinceUid = uidNext - maxMessages;
   }
 
   let lock;
@@ -131,7 +139,7 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
     if (lock && !lock.released) lock.release();
   }
 
-  return { mailbox: mailboxPath, synced: count, errors };
+  return { mailbox: mailboxPath, synced: count, errors, skippedBacklog, lastUid, sinceUid, uidNext };
 }
 
 /**
@@ -160,16 +168,19 @@ export async function runImapSync(db, opts = {}) {
     let boxes = opts.mailboxes;
     if (!boxes) {
       boxes = ['INBOX', 'INBOX.Sent'];
-      try {
-        const listed = await client.list();
-        for (const mb of listed) {
-          const path = mb.path || '';
-          const lower = path.toLowerCase();
-          if (/junk|spam|ind[eé]sirable|bulk/.test(lower) && !boxes.includes(path)) {
-            boxes.push(path);
+      // Skip Junk/Spam on lean syncs — they dominate backlog and hide real guest mail.
+      if (!opts.skipJunk) {
+        try {
+          const listed = await client.list();
+          for (const mb of listed) {
+            const path = mb.path || '';
+            const lower = path.toLowerCase();
+            if (/junk|spam|ind[eé]sirable|bulk/.test(lower) && !boxes.includes(path)) {
+              boxes.push(path);
+            }
           }
-        }
-      } catch { /* ignore list failure */ }
+        } catch { /* ignore list failure */ }
+      }
     }
     for (const box of boxes) {
       results.push(await syncMailbox(db, client, box, {
