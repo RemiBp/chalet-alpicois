@@ -126,7 +126,10 @@ export function isPlausiblePhone(value) {
   // Reject polluted captures like "éphone, mail). Je les…"
   if (/[a-zA-Zà-ÿ]{2,}/i.test(s)) return false;
   const digits = s.replace(/\D/g, '');
-  return digits.length >= 8 && digits.length <= 15;
+  if (digits.length < 8 || digits.length > 15) return false;
+  // Bare 12+ digit blobs are usually timestamps/IDs, not phone numbers.
+  if (!/^\s*(\+|00)/.test(s) && digits.length > 11) return false;
+  return true;
 }
 
 export function extractPhone(text) {

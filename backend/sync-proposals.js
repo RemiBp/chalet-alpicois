@@ -495,3 +495,27 @@ export function rejectPendingByField(db, field, actor = 'gilles') {
     results,
   };
 }
+
+/** Drop pending phone proposals that would never pass isPlausiblePhone. */
+export function rejectInvalidPhoneProposals(db, actor = 'gilles') {
+  ensureValidationColumn(db);
+  const rows = db.prepare(`
+    SELECT id, payload_json FROM audit_log
+    WHERE validation_status = 'pending' AND action = 'sync_proposal'
+    ORDER BY created_at DESC
+    LIMIT 2000
+  `).all();
+  const decisions = [];
+  for (const row of rows) {
+    let payload = {};
+    try { payload = JSON.parse(row.payload_json || '{}'); } catch { /* ignore */ }
+    if (payload.field === 'phone' && !isPlausiblePhone(payload.proposed)) {
+      decisions.push({ id: row.id, approved: false });
+    }
+  }
+  if (!decisions.length) {
+    return { rejected: 0, pendingCount: countPendingProposals(db) };
+  }
+  const results = resolveSyncProposals(db, decisions, actor);
+  return { rejected: results.filter(r => r.ok).length, pendingCount: countPendingProposals(db) };
+}

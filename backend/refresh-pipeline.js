@@ -13,7 +13,7 @@ import { enrichProfilesFromEmails } from './extract-profile.js';
 import { reconcileBookingsWithAi } from './ai-booking-verify.js';
 import { isDeepSeekConfigured } from './deepseek-client.js';
 import { dedupeOverlappingBookings } from './dedupe-bookings.js';
-import { scanEmailsForProposals } from './sync-proposals.js';
+import { scanEmailsForProposals, rejectInvalidPhoneProposals } from './sync-proposals.js';
 import { seedProgressFromExcel } from './stay-progress.js';
 
 /**
@@ -59,6 +59,9 @@ export async function runRefreshPipeline(db, opts = {}) {
     // Soft "mail to review" cards are useful but noisy — keep the daily queue small.
     reviewLimit: quick ? 8 : 0,
   });
+
+  // Opportunistic cleanup of bad auto-proposals left from older extractors.
+  report.invalidPhoneCleanup = rejectInvalidPhoneProposals(db, 'automatic');
 
   if (opts.skipAi) {
     report.aiReconcile = { skipped: true, reason: 'skipAi' };
