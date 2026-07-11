@@ -152,16 +152,9 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-app.use('/api', (req, res, next) => {
-  if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
-  if (req.path === '/admin/login') return next();
-  res.on('finish', () => {
-    if (res.statusCode >= 200 && res.statusCode < 300) {
-      persistDb().catch(err => console.error('persistDb:', err.message));
-    }
-  });
-  next();
-});
+// Writes must await requirePersistDb()/persistAfterWrite() in the handler.
+// Do NOT fire-and-forget persist on res.finish — it races ensureFreshDb()
+// (closes SQLite mid-backup) and used to coalesce onto a stale Blob snapshot.
 
 // ─── ADMIN ────────────────────────────────────────
 
@@ -298,7 +291,7 @@ app.post('/api/audit/resolve', async (req, res) => {
       return res.status(400).json({ error: 'decisions[] requis' });
     }
     const results = resolveSyncProposals(db, decisions, adminActorFromReq(req));
-    if (process.env.VERCEL === '1') await persistDb().catch(() => {});
+    await requirePersistDb();
     res.json({ ok: true, results, pendingCount: countPendingProposals(db) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -403,7 +396,7 @@ app.get('/api/calendar', async (req, res) => {
       refreshBookingStatuses(db, { sinceDays: 120, limit: 800 });
       lastCalendarRefreshAt = Date.now();
       if (process.env.VERCEL === '1') {
-        await persistDb().catch(err => console.error('calendar persistDb:', err.message));
+        await requirePersistDb();
       }
     }
     const season = req.query.season || '2026-2027';
@@ -752,55 +745,63 @@ app.put('/api/contacts/:id/stay-progress', async (req, res) => {
 
 // ─── POST /api/contacts ────────────────────────────
 
-app.post('/api/contacts', (req, res) => {
-  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
-    return res.status(401).json({ error: 'Authentification admin requise' });
-  }
-  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const now = new Date().toISOString();
-  const b = req.body;
-  if (isInternalEmail(b.email || '')) {
-    return res.status(400).json({
-      error: 'Adresse interne — utilisez le profil « Barbier et amis » pour les semaines personnelles.',
-    });
-  }
-  db.prepare(`
-    INSERT INTO contacts (id, name, first_name, email, alternate_emails, phone, alternate_phones, origin, origin_detail,
-      status, nationality, address, postal_code, country, notes, first_contact_date, last_contact_date, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `).run(
-    id,
-    b.name || '',
-    b.firstName || b.first_name || '',
-    b.email || '',
-    JSON.stringify(b.alternateEmails || []),
-    b.phone || '',
-    JSON.stringify(b.alternatePhones || []),
-    b.origin || 'email',
-    b.originDetail || b.origin_detail || '',
-    b.status || 'prospect',
-    b.nationality || '',
-    b.address || '',
-    b.postalCode || b.postal_code || '',
-    b.country || '',
-    b.notes || '',
-    b.firstContactDate || b.first_contact_date || now,
-    b.lastContactDate || b.last_contact_date || now,
-  );
-  const contact = db.prepare('SELECT * FROM contacts WHERE id = ?').get(id);
-  const camel = toCamel(contact);
-  try { camel.alternatePhones = JSON.parse(contact.alternate_phones || '[]'); } catch { camel.alternatePhones = []; }
-  camel.stays = [];
-  camel.requestedWeeks = [];
-  camel.totalStays = 0;
-  res.json(camel);
-});
-
-app.post('/api/contacts/:id/merge', (req, res) => {
+app.post('/api/contacts', async (req, res) => {
   if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
   try {
+    await ensureFreshDb();
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const now = new Date().toISOString();
+    const b = req.body;
+    if (isInternalEmail(b.email || '')) {
+      return res.status(400).json({
+        error: 'Adresse interne — utilisez le profil « Barbier et amis » pour les semaines personnelles.',
+      });
+    }
+    db.prepare(`
+      INSERT INTO contacts (id, name, first_name, email, alternate_emails, phone, alternate_phones, origin, origin_detail,
+        status, nationality, address, postal_code, country, notes, first_contact_date, last_contact_date, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `).run(
+      id,
+      b.name || '',
+      b.firstName || b.first_name || '',
+      b.email || '',
+      JSON.stringify(b.alternateEmails || []),
+      b.phone || '',
+      JSON.stringify(b.alternatePhones || []),
+      b.origin || 'email',
+      b.originDetail || b.origin_detail || '',
+      b.status || 'prospect',
+      b.nationality || '',
+      b.address || '',
+      b.postalCode || b.postal_code || '',
+      b.country || '',
+      b.notes || '',
+      b.firstContactDate || b.first_contact_date || now,
+      b.lastContactDate || b.last_contact_date || now,
+    );
+    await requirePersistDb();
+    const contact = db.prepare('SELECT * FROM contacts WHERE id = ?').get(id);
+    const camel = toCamel(contact);
+    try { camel.alternatePhones = JSON.parse(contact.alternate_phones || '[]'); } catch { camel.alternatePhones = []; }
+    camel.stays = [];
+    camel.requestedWeeks = [];
+    camel.totalStays = 0;
+    res.json(camel);
+  } catch (err) {
+    console.error('POST /api/contacts', err);
+    res.status(500).json({ error: err.message || 'Erreur création contact' });
+  }
+});
+
+app.post('/api/contacts/:id/merge', async (req, res) => {
+  if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
+    return res.status(401).json({ error: 'Authentification admin requise' });
+  }
+  try {
+    await ensureFreshDb();
     const sourceId = req.params.id;
     const targetId = req.body?.targetId;
     if (!targetId) {
@@ -808,21 +809,22 @@ app.post('/api/contacts/:id/merge', (req, res) => {
     }
     const result = mergeContacts(db, targetId, sourceId);
     if (!result.ok) return res.status(400).json({ error: result.error });
-    if (process.env.VERCEL === '1') persistDb().catch(() => {});
+    await requirePersistDb();
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/contacts/:id/extract-profile', (req, res) => {
+app.post('/api/contacts/:id/extract-profile', async (req, res) => {
   if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
   try {
+    await ensureFreshDb();
     const result = applyExtractedProfile(db, req.params.id);
     if (!result.ok) return res.status(400).json({ error: result.error });
-    if (process.env.VERCEL === '1') persistDb().catch(() => {});
+    await requirePersistDb();
     const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(req.params.id);
     const camel = toCamel(row);
     try { camel.alternateEmails = JSON.parse(row.alternate_emails || '[]'); } catch { camel.alternateEmails = []; }
@@ -1186,11 +1188,12 @@ app.delete('/api/calendar/events/:eventId', async (req, res) => {
   }
 });
 
-app.post('/api/requested-weeks', (req, res) => {
+app.post('/api/requested-weeks', async (req, res) => {
   if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
   try {
+    await ensureFreshDb();
     ensurePersonalContact(db);
     const { contactId, checkIn, checkOut, adults, children, status, notes, price } = req.body || {};
     if (!contactId || !checkIn || !checkOut) {
@@ -1198,7 +1201,7 @@ app.post('/api/requested-weeks', (req, res) => {
     }
     const result = assignWeekToContact(db, { contactId, checkIn, checkOut, adults, children, status, notes, price });
     if (!result.ok) return res.status(400).json({ error: result.error });
-    if (process.env.VERCEL === '1') persistDb().catch(() => {});
+    await requirePersistDb();
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1207,92 +1210,107 @@ app.post('/api/requested-weeks', (req, res) => {
 
 // ─── POST /api/stays ───────────────────────────────
 
-app.post('/api/stays', (req, res) => {
+app.post('/api/stays', async (req, res) => {
   if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
-  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const b = req.body;
-  db.prepare(`
-    INSERT INTO stays (id, contact_id, season, check_in, check_out, nights, adults, children,
-      price_quoted, price_confirmed, status, notes, options, payment_method, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(
-    id,
-    b.contactId || b.contact_id,
-    b.season || '',
-    b.checkIn || b.check_in || '',
-    b.checkOut || b.check_out || '',
-    b.nights || 7,
-    b.adults || 1,
-    b.children || 0,
-    b.priceQuoted || b.price_quoted || 0,
-    b.priceConfirmed || b.price_confirmed || 0,
-    b.status || 'pending',
-    b.notes || '',
-    JSON.stringify(b.options || {}),
-    b.paymentMethod || b.payment_method || '',
-  );
-  const stay = db.prepare('SELECT * FROM stays WHERE id = ?').get(id);
-  const camel = toCamel(stay);
-  try { camel.options = JSON.parse(stay.options || '{}'); } catch { camel.options = {}; }
-  if (process.env.VERCEL === '1') persistDb().catch(() => {});
-  res.json(camel);
+  try {
+    await ensureFreshDb();
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const b = req.body;
+    db.prepare(`
+      INSERT INTO stays (id, contact_id, season, check_in, check_out, nights, adults, children,
+        price_quoted, price_confirmed, status, notes, options, payment_method, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(
+      id,
+      b.contactId || b.contact_id,
+      b.season || '',
+      b.checkIn || b.check_in || '',
+      b.checkOut || b.check_out || '',
+      b.nights || 7,
+      b.adults || 1,
+      b.children || 0,
+      b.priceQuoted || b.price_quoted || 0,
+      b.priceConfirmed || b.price_confirmed || 0,
+      b.status || 'pending',
+      b.notes || '',
+      JSON.stringify(b.options || {}),
+      b.paymentMethod || b.payment_method || '',
+    );
+    await requirePersistDb();
+    const stay = db.prepare('SELECT * FROM stays WHERE id = ?').get(id);
+    const camel = toCamel(stay);
+    try { camel.options = JSON.parse(stay.options || '{}'); } catch { camel.options = {}; }
+    res.json(camel);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── PUT /api/stays/:id ────────────────────────────
 
-app.put('/api/stays/:id', (req, res) => {
+app.put('/api/stays/:id', async (req, res) => {
   if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
-  const { id } = req.params;
-  const existing = db.prepare('SELECT * FROM stays WHERE id = ?').get(id);
-  if (!existing) return res.status(404).json({ error: 'Stay not found' });
+  try {
+    await ensureFreshDb();
+    const { id } = req.params;
+    const existing = db.prepare('SELECT * FROM stays WHERE id = ?').get(id);
+    if (!existing) return res.status(404).json({ error: 'Stay not found' });
 
-  const fieldMap = {
-    season: 'season', checkIn: 'check_in', check_in: 'check_in',
-    checkOut: 'check_out', check_out: 'check_out',
-    nights: 'nights', adults: 'adults', children: 'children',
-    priceQuoted: 'price_quoted', price_quoted: 'price_quoted',
-    priceConfirmed: 'price_confirmed', price_confirmed: 'price_confirmed',
-    status: 'status', notes: 'notes',
-    paymentMethod: 'payment_method', payment_method: 'payment_method',
-  };
+    const fieldMap = {
+      season: 'season', checkIn: 'check_in', check_in: 'check_in',
+      checkOut: 'check_out', check_out: 'check_out',
+      nights: 'nights', adults: 'adults', children: 'children',
+      priceQuoted: 'price_quoted', price_quoted: 'price_quoted',
+      priceConfirmed: 'price_confirmed', price_confirmed: 'price_confirmed',
+      status: 'status', notes: 'notes',
+      paymentMethod: 'payment_method', payment_method: 'payment_method',
+    };
 
-  const updates = [];
-  const vals = [];
+    const updates = [];
+    const vals = [];
 
-  for (const [bodyKey, dbCol] of Object.entries(fieldMap)) {
-    if (req.body[bodyKey] !== undefined) {
-      updates.push(`${dbCol} = ?`);
-      vals.push(req.body[bodyKey]);
+    for (const [bodyKey, dbCol] of Object.entries(fieldMap)) {
+      if (req.body[bodyKey] !== undefined) {
+        updates.push(`${dbCol} = ?`);
+        vals.push(req.body[bodyKey]);
+      }
     }
-  }
 
-  if (req.body.options !== undefined) {
-    updates.push('options = ?');
-    vals.push(JSON.stringify(req.body.options));
-  }
+    if (req.body.options !== undefined) {
+      updates.push('options = ?');
+      vals.push(JSON.stringify(req.body.options));
+    }
 
-  if (updates.length > 0) {
-    vals.push(id);
-    db.prepare(`UPDATE stays SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
-  }
+    if (updates.length > 0) {
+      vals.push(id);
+      db.prepare(`UPDATE stays SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
+      await requirePersistDb();
+    }
 
-  if (process.env.VERCEL === '1') persistDb().catch(() => {});
-  res.json({ success: true });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── DELETE /api/stays/:id ─────────────────────────
 
-app.delete('/api/stays/:id', (req, res) => {
+app.delete('/api/stays/:id', async (req, res) => {
   if (!verifyAdminToken((req.headers.authorization || '').replace(/^Bearer\s+/i, ''))) {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
-  db.prepare('DELETE FROM stays WHERE id = ?').run(req.params.id);
-  if (process.env.VERCEL === '1') persistDb().catch(() => {});
-  res.json({ success: true });
+  try {
+    await ensureFreshDb();
+    db.prepare('DELETE FROM stays WHERE id = ?').run(req.params.id);
+    await requirePersistDb();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── GET /api/contacts/:id/interactions ────────────
@@ -1306,41 +1324,59 @@ app.get('/api/contacts/:id/interactions', (req, res) => {
 
 // ─── POST /api/contacts/:id/interactions ───────────
 
-app.post('/api/contacts/:id/interactions', (req, res) => {
-  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const b = req.body;
-  db.prepare(`
-    INSERT INTO contact_interactions (id, contact_id, date, type, subject, notes)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, req.params.id, b.date || new Date().toISOString().slice(0, 10), b.type || 'other', b.subject || '', b.notes || '');
-  const row = db.prepare('SELECT * FROM contact_interactions WHERE id = ?').get(id);
-  res.json(toCamel(row));
+app.post('/api/contacts/:id/interactions', async (req, res) => {
+  try {
+    await ensureFreshDb();
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const b = req.body;
+    db.prepare(`
+      INSERT INTO contact_interactions (id, contact_id, date, type, subject, notes)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, req.params.id, b.date || new Date().toISOString().slice(0, 10), b.type || 'other', b.subject || '', b.notes || '');
+    await requirePersistDb();
+    const row = db.prepare('SELECT * FROM contact_interactions WHERE id = ?').get(id);
+    res.json(toCamel(row));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── PUT /api/interactions/:id ─────────────────────
 
-app.put('/api/interactions/:id', (req, res) => {
-  const existing = db.prepare('SELECT * FROM contact_interactions WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Interaction not found' });
+app.put('/api/interactions/:id', async (req, res) => {
+  try {
+    await ensureFreshDb();
+    const existing = db.prepare('SELECT * FROM contact_interactions WHERE id = ?').get(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Interaction not found' });
 
-  const fieldMap = { date: 'date', type: 'type', subject: 'subject', notes: 'notes' };
-  const updates = [];
-  const vals = [];
-  for (const [k, col] of Object.entries(fieldMap)) {
-    if (req.body[k] !== undefined) { updates.push(`${col} = ?`); vals.push(req.body[k]); }
+    const fieldMap = { date: 'date', type: 'type', subject: 'subject', notes: 'notes' };
+    const updates = [];
+    const vals = [];
+    for (const [k, col] of Object.entries(fieldMap)) {
+      if (req.body[k] !== undefined) { updates.push(`${col} = ?`); vals.push(req.body[k]); }
+    }
+    if (updates.length > 0) {
+      vals.push(req.params.id);
+      db.prepare(`UPDATE contact_interactions SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
+      await requirePersistDb();
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  if (updates.length > 0) {
-    vals.push(req.params.id);
-    db.prepare(`UPDATE contact_interactions SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
-  }
-  res.json({ success: true });
 });
 
 // ─── DELETE /api/interactions/:id ──────────────────
 
-app.delete('/api/interactions/:id', (req, res) => {
-  db.prepare('DELETE FROM contact_interactions WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
+app.delete('/api/interactions/:id', async (req, res) => {
+  try {
+    await ensureFreshDb();
+    db.prepare('DELETE FROM contact_interactions WHERE id = ?').run(req.params.id);
+    await requirePersistDb();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── GET /api/stays ───────────────────────────────

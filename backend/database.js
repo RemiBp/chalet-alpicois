@@ -3,7 +3,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { copyFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
+import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -16,6 +16,15 @@ const BLOB_ACCESS = process.env.BLOB_STORE_ACCESS === 'private' ? 'private' : 'p
 
 let dbInstance = null;
 let initPromise = null;
+
+/** Serializes Blob load/persist so we never close SQLite mid-backup or coalesce stale snapshots. */
+let dbIoChain = Promise.resolve();
+
+function enqueueDbIo(fn) {
+  const run = dbIoChain.then(fn, fn);
+  dbIoChain = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 function findBundledDb() {
   for (const p of [
@@ -51,7 +60,6 @@ async function loadFromBlob() {
     });
     if (!res.ok) return false;
     const buf = Buffer.from(await res.arrayBuffer());
-    const { writeFileSync } = await import('fs');
     writeFileSync(TMP_DB, buf);
     console.log(`Loaded emails.db from Vercel Blob (${buf.length} bytes)`);
     return true;
@@ -211,7 +219,23 @@ export function getDbSync() {
   return dbInstance;
 }
 
-let persistInFlight = null;
+async function snapshotOpenDb(db) {
+  if (existsSync(PERSIST_SNAP)) unlinkSync(PERSIST_SNAP);
+  // Consistent on-disk copy via better-sqlite3 backup (Promise in v11).
+  // Fallback to file copy if the connection is already closed.
+  try {
+    if (db && db.open) {
+      await db.backup(PERSIST_SNAP);
+      return;
+    }
+  } catch (err) {
+    console.warn('db.backup failed, falling back to file copy:', err.message);
+  }
+  if (!existsSync(TMP_DB)) {
+    throw new Error('no_db_file');
+  }
+  copyFileSync(TMP_DB, PERSIST_SNAP);
+}
 
 /** @returns {Promise<{ ok: boolean, reason?: string, error?: string, size?: number }>} */
 export async function persistDbDetailed() {
@@ -222,18 +246,13 @@ export async function persistDbDetailed() {
     console.warn('persistDb skipped: BLOB_READ_WRITE_TOKEN missing — connect a Blob store in Vercel Storage');
     return { ok: false, reason: 'no_blob_token' };
   }
-  if (!dbInstance && !existsSync(TMP_DB)) {
-    return { ok: false, reason: 'no_db_file' };
-  }
-  if (persistInFlight) return persistInFlight;
-  persistInFlight = (async () => {
+
+  return enqueueDbIo(async () => {
     try {
-      if (existsSync(PERSIST_SNAP)) unlinkSync(PERSIST_SNAP);
-      if (dbInstance) {
-        await dbInstance.backup(PERSIST_SNAP);
-      } else {
-        copyFileSync(TMP_DB, PERSIST_SNAP);
+      if (!dbInstance && !existsSync(TMP_DB)) {
+        return { ok: false, reason: 'no_db_file' };
       }
+      await snapshotOpenDb(dbInstance);
       const data = readFileSync(PERSIST_SNAP);
       const { put } = await import('@vercel/blob');
       await put(BLOB_KEY, data, {
@@ -248,11 +267,8 @@ export async function persistDbDetailed() {
     } catch (err) {
       console.error('Blob persist:', err.message);
       return { ok: false, reason: 'put_failed', error: err.message };
-    } finally {
-      persistInFlight = null;
     }
-  })();
-  return persistInFlight;
+  });
 }
 
 export async function persistDb() {
@@ -274,18 +290,21 @@ export async function reloadDbFromBlob() {
   if (process.env.VERCEL !== '1') {
     return ensureDb();
   }
-  if (dbInstance) {
-    try { dbInstance.close(); } catch { /* ignore */ }
-    dbInstance = null;
-    initPromise = null;
-  }
-  if (existsSync(TMP_DB)) {
-    try { unlinkSync(TMP_DB); } catch { /* ignore */ }
-  }
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
-    await loadFromBlob();
-  }
-  return ensureDb();
+
+  return enqueueDbIo(async () => {
+    if (dbInstance) {
+      try { dbInstance.close(); } catch { /* ignore */ }
+      dbInstance = null;
+      initPromise = null;
+    }
+    if (existsSync(TMP_DB)) {
+      try { unlinkSync(TMP_DB); } catch { /* ignore */ }
+    }
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      await loadFromBlob();
+    }
+    return ensureDb();
+  });
 }
 
 export { BLOB_KEY, BLOB_ACCESS };
