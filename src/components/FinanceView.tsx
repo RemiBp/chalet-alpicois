@@ -339,10 +339,7 @@ export default function FinanceView({
                     const draft = draftFor(line);
                     const dirty = editDraft[line.id] != null;
                     return (
-                      <div key={line.id} style={{
-                        display: 'grid',
-                        gridTemplateColumns: isAdmin && !line.personal ? '1fr auto auto auto' : '1fr auto auto',
-                        gap: 12, alignItems: 'center',
+                      <div key={line.id} className={`finance-line-row${isAdmin && !line.personal ? '' : ' is-readonly'}`} style={{
                         padding: '12px 16px', borderTop: '1px solid var(--border-subtle)',
                       }}>
                         <div>

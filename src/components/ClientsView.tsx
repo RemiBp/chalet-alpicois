@@ -128,8 +128,13 @@ function BookingProgressPanel({
                   <input
                     type={f.type || 'text'}
                     disabled={!isAdmin || busy === id}
-                    value={value == null ? '' : String(value)}
-                    onChange={e => patch(p, f.key, e.target.value)}
+                    defaultValue={value == null ? '' : String(value)}
+                    key={`${id}:${value == null ? '' : String(value)}`}
+                    onBlur={e => {
+                      const next = e.target.value;
+                      const prev = value == null ? '' : String(value);
+                      if (next !== prev) patch(p, f.key, next);
+                    }}
                     style={{ marginTop: 4, width: '100%', padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border-color)', fontSize: 11 }}
                   />
                 </label>
@@ -343,9 +348,12 @@ function InquiriesPanel({
   async function persistInquiry() {
     if (!isAdmin) return;
     setSyncing(true);
+    setError(null);
     try {
       const res = await syncContactInquiry(contactId);
       onWeeksChange(res.weeks);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur enregistrement des dates');
     } finally {
       setSyncing(false);
     }
@@ -355,7 +363,7 @@ function InquiriesPanel({
     ? weeks
     : clientExtract
       ? [{
-          id: 'detected',
+          id: 'extracted-preview',
           season: '',
           weekNumber: 0,
           checkIn: clientExtract.checkIn,
@@ -371,6 +379,10 @@ function InquiriesPanel({
       : [];
 
   async function draftAvailable(rw: RequestedWeek, lang: 'fr' | 'en' = previewLang) {
+    if (!contact.email?.trim()) {
+      setError('Email manquant — renseignez-le dans Coordonnées puis enregistrez.');
+      return;
+    }
     setDrafting('available-' + rw.id);
     setError(null);
     setDraftSuccess(null);
@@ -429,6 +441,10 @@ function InquiriesPanel({
   }
 
   async function draftAlternatives(rw: RequestedWeek) {
+    if (!contact.email?.trim()) {
+      setError('Email manquant — renseignez-le dans Coordonnées puis enregistrez.');
+      return;
+    }
     const alts = (rw.alternatives || []).filter(a => selectedAlts.has(a.checkIn));
     if (!alts.length) {
       setError('Sélectionnez au moins une semaine alternative');
@@ -863,9 +879,12 @@ function ContactDetailView({ contactId, onBack, onMerged, isAdmin }: {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button type="button" onClick={onBack} style={{ padding: 8, borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-body)', cursor: 'pointer', display: 'flex' }}>
+      <div style={{ padding: '14px clamp(12px, 3vw, 20px)', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => {
+            if (dirty && editing && !window.confirm('Modifications non enregistrées. Quitter sans sauvegarder ?')) return;
+            onBack();
+          }} style={{ padding: 8, borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-body)', cursor: 'pointer', display: 'flex' }}>
             <ArrowLeft size={16} />
           </button>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -880,10 +899,10 @@ function ContactDetailView({ contactId, onBack, onMerged, isAdmin }: {
               {p.language && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.language.toUpperCase()}</span>}
             </div>
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-              {contact.email} · {contact.messageCount || 0} messages · dernier contact {fmtDate(contact.lastContactDate)}
+              {[contact.email, `${contact.messageCount || 0} messages`, contact.lastContactDate ? `dernier contact ${fmtDate(contact.lastContactDate)}` : null].filter(Boolean).join(' · ')}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
+          <div className="contact-detail-header-actions">
             {!editing && isAdmin && (
               <>
                 <button
@@ -1003,8 +1022,8 @@ function ContactDetailView({ contactId, onBack, onMerged, isAdmin }: {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 380px) minmax(280px, 340px) 1fr', gap: 16, alignItems: 'start' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px clamp(12px, 3vw, 20px)', paddingBottom: editing && dirty ? 96 : 20 }}>
+        <div className="contact-detail-grid">
 
           {/* Col 1 — Coordonnées & origine */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1016,18 +1035,18 @@ function ContactDetailView({ contactId, onBack, onMerged, isAdmin }: {
             )}
 
             <Card title="Coordonnées" accent="var(--brand)" icon={MapPin}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 10px' }}>
+              <div className="contact-field-pair">
                 <Field label="Nom" value={nameParts.lastName} disabled={fieldsDisabled} onChange={v => patchContact({ name: v })} />
                 <Field label="Prénom" value={nameParts.firstName} disabled={fieldsDisabled} onChange={v => patchContact({ firstName: v })} placeholder="—" />
               </div>
               <Field label="Email" value={contact.email} disabled={fieldsDisabled} onChange={v => patchContact({ email: v })} />
               <Field label="Email secondaire" value={(contact.alternateEmails || [])[0] || ''} disabled={fieldsDisabled} onChange={v => patchContact({ alternateEmails: v ? [v] : [] })} placeholder="—" />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 10px' }}>
+              <div className="contact-field-pair">
                 <Field label="Téléphone" value={contact.phone || ''} disabled={fieldsDisabled} onChange={v => patchContact({ phone: v })} type="tel" />
                 <Field label="Tél. 2" value={altPhone} disabled={fieldsDisabled} onChange={v => patchContact({ alternatePhones: v ? [v] : [] })} type="tel" />
               </div>
               <Field label="Adresse" value={contact.address || ''} disabled={fieldsDisabled} onChange={v => patchContact({ address: v })} />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 10px' }}>
+              <div className="contact-field-pair">
                 <Field label="Code postal" value={contact.postalCode || ''} disabled={fieldsDisabled} onChange={v => patchContact({ postalCode: v })} />
                 <Field label="Pays" value={contact.country || ''} disabled={fieldsDisabled} onChange={v => patchContact({ country: v })} />
               </div>
@@ -1133,6 +1152,34 @@ function ContactDetailView({ contactId, onBack, onMerged, isAdmin }: {
         </div>
       </div>
 
+      {editing && dirty && (
+        <div className="contact-edit-bar">
+          <button
+            type="button"
+            onClick={cancelEditing}
+            disabled={saving}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 12px', borderRadius: 8,
+              border: '1px solid var(--border-color)', background: 'var(--bg-body)',
+              color: 'var(--text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            <X size={14} /> Annuler
+          </button>
+          <button
+            type="button"
+            onClick={saveAllFields}
+            disabled={saving || !dirty}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 12px', borderRadius: 8,
+              border: 'none', background: 'var(--brand)', color: 'white', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />} Enregistrer
+          </button>
+        </div>
+      )}
+
       {mergeOpen && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(15,23,42,0.45)',
@@ -1209,6 +1256,7 @@ export default function ClientsView({
   const [newClientOpen, setNewClientOpen] = useState(false);
   const [newClient, setNewClient] = useState({ firstName: '', name: '', email: '', phone: '', origin: 'other' as ContactOrigin, notes: '' });
   const [creatingClient, setCreatingClient] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedId(urlContactId ?? null);
@@ -1263,6 +1311,7 @@ export default function ClientsView({
   async function submitNewClient() {
     if (!isAdmin || !newClient.name.trim()) return;
     setCreatingClient(true);
+    setCreateError(null);
     try {
       const created = await createContact({
         ...newClient,
@@ -1274,6 +1323,8 @@ export default function ClientsView({
       setNewClientOpen(false);
       setNewClient({ firstName: '', name: '', email: '', phone: '', origin: 'other', notes: '' });
       navigate(routes.client(created.id));
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : 'Création impossible — vérifiez le mode admin et réessayez.');
     } finally {
       setCreatingClient(false);
     }
@@ -1289,7 +1340,7 @@ export default function ClientsView({
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <h1 style={{ fontSize: 22, fontWeight: 700 }}>Clients</h1>
           {isAdmin && (
-            <button type="button" onClick={() => setNewClientOpen(true)}
+            <button type="button" onClick={() => { setNewClientOpen(true); setCreateError(null); }}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, border: 'none', background: 'var(--brand)', color: 'white', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
               <UserPlus size={14} /> Nouveau client
             </button>
@@ -1323,8 +1374,14 @@ export default function ClientsView({
             <Field label="Téléphone" value={newClient.phone} onChange={v => setNewClient(c => ({ ...c, phone: v }))} type="tel" />
           </div>
           <Field label="Notes / source" value={newClient.notes} onChange={v => setNewClient(c => ({ ...c, notes: v }))} multiline />
+          {createError && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.25)', fontSize: 11, color: '#b91c1c', marginBottom: 10 }}>
+              <XCircle size={14} />
+              {createError}
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" onClick={() => setNewClientOpen(false)} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer' }}>Annuler</button>
+            <button type="button" onClick={() => { setNewClientOpen(false); setCreateError(null); }} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer' }}>Annuler</button>
             <button type="button" disabled={creatingClient || !newClient.name.trim()} onClick={submitNewClient} style={{ padding: '8px 12px', borderRadius: 8, border: 'none', background: 'var(--brand)', color: 'white', fontWeight: 700, cursor: 'pointer' }}>
               {creatingClient ? 'Création…' : 'Créer la fiche'}
             </button>

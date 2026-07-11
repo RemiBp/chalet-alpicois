@@ -489,7 +489,7 @@ export default function CalendarView({ isAdmin = false }: {
                 <Home size={12} /> Barbier et amis (0 €)
               </button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 8, alignItems: 'center' }}>
+            <div className="calendar-assign-row">
               <select value={assignContactId} onChange={e => setAssignContactId(e.target.value)}
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 12 }}>
                 <option value="">Choisir un client…</option>
@@ -504,9 +504,9 @@ export default function CalendarView({ isAdmin = false }: {
                 <option value="asked">Fin de négociation</option>
               </select>
               <input type="number" value={assignPrice} onChange={e => setAssignPrice(e.target.value)}
-                placeholder="Prix €" style={{ width: 80, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 11 }} />
+                placeholder="Prix €" style={{ width: '100%', minWidth: 80, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 11 }} />
               <button type="button" disabled={!assignContactId || actionBusy} onClick={assignWeek}
-                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 12px', borderRadius: 8, border: 'none', background: 'var(--brand)', color: 'white', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', borderRadius: 8, border: 'none', background: 'var(--brand)', color: 'white', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 <UserPlus size={12} /> Ajouter
               </button>
             </div>

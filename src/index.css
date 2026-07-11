@@ -179,8 +179,124 @@ a:hover {
 .animate-fade-in { animation: fade-in 0.2s ease-out forwards; }
 .animate-slide-right { animation: slide-in-right 0.25s ease-out forwards; }
 .animate-spin { animation: spin 1s linear infinite; }
+.spin { animation: spin 1s linear infinite; }
 .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
 .animate-kpi { animation: kpi-count-in 0.4s ease-out forwards; }
+
+/* Contact detail — phone first, desktop multi-column */
+.contact-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (min-width: 900px) {
+  .contact-detail-grid {
+    grid-template-columns: minmax(280px, 380px) minmax(260px, 340px) 1fr;
+  }
+}
+
+.contact-field-pair {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 10px;
+}
+@media (min-width: 480px) {
+  .contact-field-pair {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.contact-detail-header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.contact-edit-bar {
+  display: none;
+}
+@media (max-width: 768px) {
+  .contact-edit-bar {
+    display: flex;
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: 78px;
+    z-index: 115;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-lg);
+  }
+  .contact-edit-bar button {
+    flex: 1;
+  }
+}
+
+/* Messages / docs pickers — stack on phone */
+.messages-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (min-width: 768px) {
+  .messages-layout {
+    grid-template-columns: 260px 1fr;
+  }
+  .messages-layout.is-empty {
+    grid-template-columns: 280px 1fr;
+  }
+}
+
+.docs-picker-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (min-width: 768px) {
+  .docs-picker-layout {
+    grid-template-columns: 280px 1fr;
+  }
+  .docs-picker-layout.is-selected {
+    grid-template-columns: 1fr;
+  }
+}
+
+.calendar-assign-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 640px) {
+  .calendar-assign-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    align-items: center;
+  }
+}
+
+.finance-line-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 640px) {
+  .finance-line-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    align-items: center;
+    gap: 8px;
+  }
+  .finance-line-row.is-readonly {
+    grid-template-columns: 1fr auto auto;
+  }
+}
 
 /* Dashboard — responsive */
 .dashboard {

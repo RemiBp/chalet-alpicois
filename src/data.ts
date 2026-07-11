@@ -207,7 +207,11 @@ export async function createContact(contact: Partial<Contact>): Promise<Contact>
     method: 'POST',
     body: JSON.stringify(contact),
   });
-  if (!res.ok) throw new Error(`API ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error || `Création impossible (${res.status})`);
+  }
+  invalidateContactsCache();
   return res.json();
 }
 

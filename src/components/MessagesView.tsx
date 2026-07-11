@@ -140,7 +140,7 @@ export default function MessagesView({ isAdmin = false }: { isAdmin?: boolean })
   const sentCount = tracking.filter(t => t.status === 'sent').length;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '260px 1fr' : '280px 1fr', gap: 16, alignItems: 'start' }}>
+    <div className={`messages-layout${selectedId ? '' : ' is-empty'}`}>
       <div style={{ background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border-color)', overflow: 'hidden' }}>
         <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>LOCATAIRE</div>

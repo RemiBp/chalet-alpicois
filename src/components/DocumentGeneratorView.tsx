@@ -407,12 +407,7 @@ export default function DocumentGeneratorView({ mode, isAdmin = false, hideHeade
       </div>
       )}
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: selectedId ? '1fr' : '280px 1fr',
-        gap: 20,
-        alignItems: 'start',
-      }}>
+      <div className={`docs-picker-layout${selectedId ? ' is-selected' : ''}`}>
         {/* Contact picker — masqué après sélection */}
         {!selectedId && (
           <div style={{ background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border-color)', overflow: 'hidden' }}>
