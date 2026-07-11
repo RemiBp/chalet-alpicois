@@ -251,7 +251,11 @@ export default function DocumentGeneratorView({ mode, isAdmin = false, hideHeade
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
-    const base = contacts.filter(c => !c.isPersonal && c.id !== 'barbier-et-amis');
+    const base = contacts.filter(c =>
+      !c.isPersonal
+      && c.id !== 'barbier-et-amis'
+      && !String(c.email || '').toLowerCase().endsWith('@test.local')
+    );
     if (!q) return base.slice(0, 50);
     return base.filter(c => {
       const name = displayContactName(c).toLowerCase();

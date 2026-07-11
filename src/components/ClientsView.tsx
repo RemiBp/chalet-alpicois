@@ -549,8 +549,10 @@ function InquiriesPanel({
                 style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-body)', fontSize: 11, cursor: 'pointer' }}>
                 Fermer
               </button>
-              <button type="button" disabled={!!drafting} onClick={() => draftAvailable(previewFor, previewLang)}
-                style={{ padding: '8px 12px', borderRadius: 8, border: 'none', background: '#16a34a', color: 'white', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+              <button type="button" disabled={!!drafting || !contact.email?.trim()}
+                title={!contact.email?.trim() ? 'Renseignez un email sur la fiche' : undefined}
+                onClick={() => draftAvailable(previewFor, previewLang)}
+                style={{ padding: '8px 12px', borderRadius: 8, border: 'none', background: '#16a34a', color: 'white', fontSize: 11, fontWeight: 600, cursor: 'pointer', opacity: !contact.email?.trim() ? 0.5 : 1 }}>
                 Créer brouillon ({previewLang.toUpperCase()})
               </button>
             </div>
@@ -608,11 +610,13 @@ function InquiriesPanel({
                   </button>
                   <button
                     type="button"
-                    disabled={!!drafting}
+                    disabled={!!drafting || !contact.email?.trim()}
+                    title={!contact.email?.trim() ? 'Renseignez un email sur la fiche' : undefined}
                     onClick={() => draftAvailable(rw)}
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 8,
                       border: 'none', background: '#16a34a', color: 'white', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      opacity: !contact.email?.trim() ? 0.5 : 1,
                     }}
                   >
                     {drafting === 'available-' + rw.id ? <Loader2 size={12} className="spin" /> : <Send size={12} />}
@@ -684,11 +688,13 @@ function InquiriesPanel({
                 </div>
                 <button
                   type="button"
-                  disabled={!!drafting || selectedAlts.size === 0}
+                  disabled={!!drafting || selectedAlts.size === 0 || !contact.email?.trim()}
+                  title={!contact.email?.trim() ? 'Renseignez un email sur la fiche' : undefined}
                   onClick={() => draftAlternatives(rw)}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 8,
                     border: 'none', background: 'var(--brand)', color: 'white', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                    opacity: !contact.email?.trim() ? 0.5 : 1,
                   }}
                 >
                   {drafting === 'alt-' + rw.id ? <Loader2 size={12} className="spin" /> : <Mail size={12} />}

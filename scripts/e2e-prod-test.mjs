@@ -108,8 +108,16 @@ async function main() {
     const tpls = await req('GET', '/mail/templates');
     templateKey = tpls.json?.templates?.[0]?.key || templateKey;
     const contacts = await req('GET', '/contacts');
-    const withStay = (contacts.json || []).find(c => c.id && c.id !== 'barbier-et-amis' && (c.totalStays > 0 || c.status === 'client'));
+    const list = contacts.json || [];
+    const hasMail = (c) => Boolean(String(c?.email || '').trim());
+    // Prefer a real guest with email — never pick empty-email "client" stubs (e.g. Grellet).
+    const withStay = list.find(c =>
+      c.id && c.id !== 'barbier-et-amis' && hasMail(c) && (c.totalStays > 0 || c.status === 'client')
+    );
+    const anyWithMail = list.find(c => c.id && c.id !== 'barbier-et-amis' && hasMail(c) && !String(c.email).includes('@test.local'));
     if (withStay?.id) testContactId = withStay.id;
+    else if (anyWithMail?.id) testContactId = anyWithMail.id;
+    else if (hasMail(list.find(c => c.id === 'barbier-et-amis'))) testContactId = 'barbier-et-amis';
 
     const { json } = await req('POST', '/mail/preview', {
       auth: true,

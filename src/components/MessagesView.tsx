@@ -50,7 +50,11 @@ export default function MessagesView({ isAdmin = false }: { isAdmin?: boolean })
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
-    const base = contacts.filter(c => !c.isPersonal && c.id !== 'barbier-et-amis');
+    const base = contacts.filter(c =>
+      !c.isPersonal
+      && c.id !== 'barbier-et-amis'
+      && !String(c.email || '').toLowerCase().endsWith('@test.local')
+    );
     if (!q) return base.slice(0, 40);
     return base.filter(c =>
       displayContactName(c).toLowerCase().includes(q) || c.email?.toLowerCase().includes(q),

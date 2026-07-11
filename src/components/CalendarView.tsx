@@ -493,7 +493,11 @@ export default function CalendarView({ isAdmin = false }: {
               <select value={assignContactId} onChange={e => setAssignContactId(e.target.value)}
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 12 }}>
                 <option value="">Choisir un client…</option>
-                {contacts.filter(c => !c.isPersonal && c.id !== PERSONAL_CONTACT_ID).map(c => (
+                {contacts.filter(c =>
+                  !c.isPersonal
+                  && c.id !== PERSONAL_CONTACT_ID
+                  && !String(c.email || '').toLowerCase().endsWith('@test.local')
+                ).map(c => (
                   <option key={c.id} value={c.id}>{displayContactName(c)} ({c.email})</option>
                 ))}
               </select>
