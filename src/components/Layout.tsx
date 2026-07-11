@@ -176,7 +176,7 @@ export default function Layout({
       {/* Mobile top bar */}
       {isMobile && (
         <header style={{
-          position: 'sticky', top: 0, zIndex: 120,
+          position: 'sticky', top: 0, zIndex: mobileMenuOpen ? 140 : 120,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           gap: 10, padding: '10px 14px', background: 'var(--bg-surface)',
           borderBottom: '1px solid var(--border-color)',
@@ -212,12 +212,12 @@ export default function Layout({
       {/* Mobile overflow menu */}
       {isMobile && mobileMenuOpen && (
         <div style={{
-          position: 'fixed', inset: 0, zIndex: 130, background: 'rgba(15,23,42,0.4)',
+          position: 'fixed', top: 57, left: 0, right: 0, bottom: 0, zIndex: 130, background: 'rgba(15,23,42,0.4)',
         }} onClick={() => setMobileMenuOpen(false)}>
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              position: 'absolute', top: 57, right: 12, left: 12, maxWidth: 360, marginLeft: 'auto',
+              position: 'absolute', top: 8, right: 12, left: 12, maxWidth: 360, marginLeft: 'auto',
               background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border-color)',
               boxShadow: 'var(--shadow-lg)', padding: 10, display: 'flex', flexDirection: 'column', gap: 4,
             }}
