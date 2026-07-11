@@ -1,6 +1,6 @@
 /** Nettoyage affichage corps d'email (MIME, HTML, quoted-printable, base64, encodage). */
 
-export type EmailContentKind = 'text' | 'image' | 'attachment' | 'mime' | 'encoding' | 'empty';
+export type EmailContentKind = 'text' | 'image' | 'attachment' | 'mime' | 'encoding' | 'encrypted' | 'empty';
 
 export interface EmailContentInfo {
   kind: EmailContentKind;
@@ -107,6 +107,32 @@ function looksLikeImagePayload(text: string): boolean {
   return false;
 }
 
+/** S/MIME, PGP, or binary blobs wrongly stored as body_text (look “cryptés”). */
+function looksLikeEncryptedOrBinary(text: string): boolean {
+  if (!text || text.length < 24) return false;
+  const head = text.slice(0, 600);
+  if (/BEGIN PGP MESSAGE|BEGIN PGP SIGNED|application\/pkcs7|smime-type|Content-Type:\s*application\/(?:pkcs7|x-pkcs7)/i.test(head)) {
+    return true;
+  }
+  if (looksLikeBase64(text) || looksLikeImagePayload(text)) return false;
+  const sample = text.slice(0, 400);
+  let weird = 0;
+  let spaces = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const code = sample.charCodeAt(i);
+    if (code === 9 || code === 10 || code === 13 || code === 32) spaces++;
+    if (code < 9 || (code > 13 && code < 32) || code === 0x7f) weird++;
+  }
+  const asciiLetters = (sample.match(/[a-zA-Z]/g) || []).length;
+  const words = (sample.match(/[a-zA-ZÀ-ÿ]{3,}/g) || []).length;
+  if (weird / sample.length > 0.12) return true;
+  // Dense binary / misdecoded attachment: almost no whitespace, few real words
+  if (sample.length > 40 && spaces < 3 && words < 3) return true;
+  if (text.length < 220 && asciiLetters < 12 && spaces < 4 && /[^\x09\x0A\x0D\x20-\x7E]/.test(sample)) return true;
+  if (text.length < 160 && asciiLetters < 8 && spaces < 2) return true;
+  return false;
+}
+
 function extractAttachmentFilename(raw: string): string | undefined {
   const m = raw.match(/name=([^\s;\n"]+\.(?:jpe?g|png|gif|heic|pdf|docx?))/i)
     || raw.match(/filename="?([^"\n;]+\.(?:jpe?g|png|gif|heic|pdf|docx?))"?/i);
@@ -206,6 +232,15 @@ export function classifyEmailContent(raw: string): EmailContentInfo {
     };
   }
 
+  if (looksLikeEncryptedOrBinary(raw)) {
+    return {
+      kind: 'encrypted',
+      label: 'Message chiffré ou pièce jointe non lisible ici — ouvrez-le dans la boîte mail Hostinger',
+      filename,
+      cleanText: '',
+    };
+  }
+
   const fffdCount = (raw.match(/\ufffd/g) || []).length;
   const encRatio = brokenEncodingRatio(raw);
   if (fffdCount >= 8 || encRatio > 0.008 || (fffdCount >= 3 && encRatio > 0.004)) {
@@ -236,7 +271,7 @@ export function classifyEmailContent(raw: string): EmailContentInfo {
 export function isGarbageEmailBody(body: string, subject = ''): boolean {
   if (!body || body.length < 20) return true;
   const info = classifyEmailContent(body);
-  if (info.kind === 'image' || info.kind === 'attachment') return false;
+  if (info.kind === 'image' || info.kind === 'attachment' || info.kind === 'encrypted') return false;
   const b = (info.cleanText || body).trim();
   if (looksLikeBase64(b) && info.kind === 'text') return false;
   if (/^WPForms/i.test(b) || b.includes('@media only screen')) return true;
@@ -249,7 +284,7 @@ export function cleanEmailBody(raw: string): string {
   if (!raw) return '';
 
   const info = classifyEmailContent(raw);
-  if (info.kind === 'image' || info.kind === 'attachment') return info.label;
+  if (info.kind === 'image' || info.kind === 'attachment' || info.kind === 'encrypted') return info.label;
   if (info.kind === 'mime' && !info.cleanText) return info.label;
   if (info.kind === 'encoding') return info.label || info.cleanText;
 
@@ -258,7 +293,7 @@ export function cleanEmailBody(raw: string): string {
 
 export function emailBodyPreview(raw: string, maxLen = 160): string {
   const info = classifyEmailContent(raw);
-  if (info.kind === 'image' || info.kind === 'attachment') return info.label;
+  if (info.kind === 'image' || info.kind === 'attachment' || info.kind === 'encrypted') return info.label;
   if (info.kind === 'mime' || info.kind === 'encoding') return info.label || info.cleanText;
   const clean = (info.cleanText || '').replace(/\s+/g, ' ').trim();
   if (!clean) return info.label || '(vide)';
@@ -267,7 +302,7 @@ export function emailBodyPreview(raw: string, maxLen = 160): string {
 
 export function isCondensedEmail(raw: string): boolean {
   const k = classifyEmailContent(raw).kind;
-  return k === 'image' || k === 'attachment' || k === 'mime' || k === 'encoding';
+  return k === 'image' || k === 'attachment' || k === 'mime' || k === 'encoding' || k === 'encrypted';
 }
 
 /** Affichage sûr — ne doit jamais crasher React (corps MIME énormes, etc.). */

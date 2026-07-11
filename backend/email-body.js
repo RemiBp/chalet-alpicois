@@ -91,6 +91,30 @@ function looksLikeImagePayload(text) {
   return false;
 }
 
+function looksLikeEncryptedOrBinary(text) {
+  if (!text || text.length < 24) return false;
+  const head = text.slice(0, 600);
+  if (/BEGIN PGP MESSAGE|BEGIN PGP SIGNED|application\/pkcs7|smime-type|Content-Type:\s*application\/(?:pkcs7|x-pkcs7)/i.test(head)) {
+    return true;
+  }
+  if (looksLikeBase64(text) || looksLikeImagePayload(text)) return false;
+  const sample = text.slice(0, 400);
+  let weird = 0;
+  let spaces = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const code = sample.charCodeAt(i);
+    if (code === 9 || code === 10 || code === 13 || code === 32) spaces++;
+    if (code < 9 || (code > 13 && code < 32) || code === 0x7f) weird++;
+  }
+  const asciiLetters = (sample.match(/[a-zA-Z]/g) || []).length;
+  const words = (sample.match(/[a-zA-ZÀ-ÿ]{3,}/g) || []).length;
+  if (weird / sample.length > 0.12) return true;
+  if (sample.length > 40 && spaces < 3 && words < 3) return true;
+  if (text.length < 220 && asciiLetters < 12 && spaces < 4 && /[^\x09\x0A\x0D\x20-\x7E]/.test(sample)) return true;
+  if (text.length < 160 && asciiLetters < 8 && spaces < 2) return true;
+  return false;
+}
+
 /** Strip <style>/<script> and collapse WPForms HTML into readable field text. */
 export function extractWpFormsPlainText(html) {
   if (!html) return '';
@@ -282,6 +306,10 @@ export function cleanStoredBodyText(raw) {
   if (looksLikeImagePayload(raw)) {
     const fn = raw.match(/name=([^\s;\n"]+\.(?:jpe?g|png|gif))/i)?.[1];
     return fn ? `Photo jointe · ${fn}` : 'Photo jointe';
+  }
+
+  if (looksLikeEncryptedOrBinary(raw)) {
+    return 'Message chiffré ou pièce jointe non lisible ici — ouvrez-le dans la boîte mail Hostinger';
   }
 
   if (looksLikeBase64(raw.trim())) {

@@ -1,7 +1,7 @@
 import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, Euro, History, AlertTriangle, Database, Eye, EyeOff, RefreshCw, CheckCircle2, Menu, X } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { fetchApiHealth, fetchStaticDataMeta, getLastDataSource, markDataSourceLive, markRefreshStateHandled, readRefreshState, type ApiHealth, type StaticDataMeta, type StoredRefreshState } from '../data';
+import { fetchApiHealth, fetchStaticDataMeta, fetchAuditLog, getLastDataSource, markDataSourceLive, markRefreshStateHandled, readRefreshState, type ApiHealth, type StaticDataMeta, type StoredRefreshState } from '../data';
 import type { AdminActor } from '../lib/adminSession';
 import { routes, isNavActive, viewFromPath } from '../lib/routes';
 import type { ViewType } from '../types';
@@ -87,6 +87,23 @@ export default function Layout({
   }, [location.pathname]);
 
   useEffect(() => {
+    if (!isAdmin) {
+      setGlobalSyncPendingCount(0);
+      return;
+    }
+    let cancelled = false;
+    fetchAuditLog(1, 'automatic', true)
+      .then(({ pendingCount }) => {
+        if (!cancelled && pendingCount > 0) {
+          setGlobalSyncPendingCount(pendingCount);
+          setGlobalSyncMsg(prev => prev || `${pendingCount} proposition(s) automatiques à valider dans Historique et sync.`);
+        }
+      })
+      .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, [isAdmin, location.pathname]);
+
+  useEffect(() => {
     if (!loginOpen) {
       setShowPassword(false);
       setLoginActor('gilles');
@@ -128,7 +145,10 @@ export default function Layout({
         if (!state.handledAt && syncHandledRef.current !== state.completedAt) {
           syncHandledRef.current = state.completedAt || Date.now();
           markRefreshStateHandled();
-          navigate(`${routes.historique}?sync=1`);
+          // Only jump to validation when there is something to review.
+          if ((state.report?.pendingCount ?? 0) > 0) {
+            navigate(`${routes.historique}?sync=1`);
+          }
         }
       } else {
         setGlobalSyncMsg(`Erreur sync — ${state.error || 'à vérifier'}`);
@@ -141,12 +161,15 @@ export default function Layout({
     };
     const onComplete = (event: Event) => {
       const report = (event as CustomEvent).detail || {};
+      const pending = report.pendingCount ?? 0;
       setGlobalSyncing(false);
       setGlobalSyncMsg(describeComplete(report));
-      setGlobalSyncPendingCount(report.pendingCount ?? 0);
+      setGlobalSyncPendingCount(pending);
       syncHandledRef.current = Date.now();
       markRefreshStateHandled();
-      navigate(`${routes.historique}?sync=1`);
+      if (pending > 0) {
+        navigate(`${routes.historique}?sync=1`);
+      }
     };
     const onError = (event: Event) => {
       setGlobalSyncing(false);

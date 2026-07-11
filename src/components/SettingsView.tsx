@@ -98,7 +98,7 @@ export default function SettingsView({ isAdmin = false }: { isAdmin?: boolean })
         </div>
         <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
           En production, activez le mode admin (cadenas) pour modifier les contacts, générer des documents et créer des brouillons mail. Les écritures sont persistées sur le serveur.
-          <br />Refresh auto emails + statuts : 2×/jour (cron Vercel).
+          <br />Refresh auto emails + propositions à valider : 2×/jour via cron Vercel (06:00 et 17:00 UTC).
         </p>
         {!health?.blob && health?.vercel && (
           <div style={{

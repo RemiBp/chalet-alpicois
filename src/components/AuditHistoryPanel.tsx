@@ -92,7 +92,14 @@ export default function AuditHistoryPanel({
     const source = filter === 'all' ? undefined : filter;
     fetchAuditLog(150, source, pendingOnly)
       .then(({ entries: list, pendingCount: n }) => {
-        setEntries(list);
+        // Concrete stay/contact updates first; soft mail reviews last (can wait).
+        const rank = (e: AuditEntry) => {
+          const field = String(e.payload?.field || '');
+          if (field === 'mailReview') return 2;
+          if (e.entityType === 'mail_review') return 2;
+          return 1;
+        };
+        setEntries([...list].sort((a, b) => rank(a) - rank(b) || String(b.createdAt).localeCompare(String(a.createdAt))));
         setPendingCount(n);
       })
       .catch(() => setEntries([]))

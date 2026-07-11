@@ -1,6 +1,6 @@
 /**
  * Pipeline refresh : IMAP → liaison contacts → signaux réservation → statuts.
- * Appelé par cron Vercel (2×/jour) ou manuellement : node backend/refresh-pipeline.js
+ * Appelé par cron Vercel (2×/jour : 06:00 et 17:00 UTC) ou manuellement : node backend/refresh-pipeline.js
  */
 
 import 'dotenv/config';
@@ -56,7 +56,8 @@ export async function runRefreshPipeline(db, opts = {}) {
   report.proposals = scanEmailsForProposals(db, {
     sinceDays: quick ? 45 : 120,
     limit: quick ? 200 : 800,
-    reviewLimit: quick ? 25 : 0,
+    // Soft "mail to review" cards are useful but noisy — keep the daily queue small.
+    reviewLimit: quick ? 8 : 0,
   });
 
   if (opts.skipAi) {
