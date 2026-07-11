@@ -1284,9 +1284,9 @@ export default function ClientsView({
   }
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ padding: '16px clamp(12px, 3vw, 24px)', maxWidth: 1000, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <h1 style={{ fontSize: 22, fontWeight: 700 }}>Clients</h1>
           {isAdmin && (
             <button type="button" onClick={() => setNewClientOpen(true)}
@@ -1341,30 +1341,29 @@ export default function ClientsView({
             const name = displayContactName(c);
             return (
               <button key={c.id} type="button" onClick={() => navigate(routes.client(c.id))}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderRadius: 10, border: '1px solid var(--border-color)', background: 'var(--bg-surface)', cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                className="client-list-row"
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border-color)', background: 'var(--bg-surface)', cursor: 'pointer', textAlign: 'left', width: '100%', minWidth: 0 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, background: cfg.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <Users size={18} color={cfg.color} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{name}</span>
-                    {c.nationality && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>({c.nationality})</span>}
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{name}</span>
+                    {c.nationality && <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>({c.nationality})</span>}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {c.lastSubject || c.email}
                   </div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 10, color: 'var(--text-muted)' }}>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4, fontSize: 10, color: 'var(--text-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span>{fmtDate(c.lastContactDate)}</span>
+                    <span style={{ fontWeight: 600, color: '#0891b2' }}>{c.messageCount || 0} msg</span>
                     {c.phone && <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Phone size={9} />{c.phone}</span>}
                     {(c.requestedWeekCount ?? c.requestedWeeks?.length ?? 0) > 0 && (
                       <span>{c.requestedWeekCount ?? c.requestedWeeks!.length} demande(s)</span>
                     )}
                   </div>
                 </div>
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{fmtDate(c.lastContactDate)}</div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: '#0891b2', marginTop: 2 }}>{c.messageCount || 0} msg</div>
-                </div>
-                <ChevronRight size={16} color="var(--text-muted)" />
+                <ChevronRight size={16} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: 12 }} />
               </button>
             );
           })}

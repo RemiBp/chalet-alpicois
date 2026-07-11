@@ -343,12 +343,16 @@ app.get('/api/cron/refresh', async (req, res) => {
     return res.status(401).json({ error: 'CRON_SECRET requis' });
   }
   try {
+    // Vercel Hobby hard-caps at 60s — default to a lean sync so daily cron does not time out.
+    // Full/AI passes remain available via query flags or admin POST.
     const report = await runRefreshOnce({
       skipImap: req.query?.skipImap === '1',
       fullSync: req.query?.fullSync === '1',
-      skipAi: req.query?.skipAi === '1',
-      quick: req.query?.quick === '1',
-      maxMessagesPerMailbox: req.query?.maxMessagesPerMailbox ? Number(req.query.maxMessagesPerMailbox) : undefined,
+      skipAi: req.query?.skipAi === '1' || req.query?.fullSync !== '1',
+      quick: req.query?.quick === '1' || req.query?.fullSync !== '1',
+      maxMessagesPerMailbox: req.query?.maxMessagesPerMailbox
+        ? Number(req.query.maxMessagesPerMailbox)
+        : (req.query?.fullSync === '1' ? undefined : 40),
     }, {
       actor: 'automatic',
       payload: {

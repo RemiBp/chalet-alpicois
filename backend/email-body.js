@@ -91,20 +91,68 @@ function looksLikeImagePayload(text) {
   return false;
 }
 
+/** Strip <style>/<script> and collapse WPForms HTML into readable field text. */
+export function extractWpFormsPlainText(html) {
+  if (!html) return '';
+  let s = String(html);
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, ' ');
+  // CSS often survives as raw text after a bad prior clean — drop rule blocks.
+  s = s.replace(/@media[^{]*\{[\s\S]*?\}\s*\}/gi, ' ');
+  s = s.replace(/@media[^{]*\{[\s\S]*?\}/gi, ' ');
+  s = s.replace(/\{[^{}]{0,400}\}/g, ' ');
+  // Prefer labelled field rows: "Votre nom" / value
+  const fields = [];
+  const fieldRe = /<td[^>]*class="[^"]*field-name[^"]*"[^>]*>[\s\S]*?<strong[^>]*>([^<]+)<\/strong>[\s\S]*?<\/td>[\s\S]*?<td[^>]*class="[^"]*field-value[^"]*"[^>]*>([\s\S]*?)<\/td>/gi;
+  let m;
+  while ((m = fieldRe.exec(s)) !== null) {
+    const label = cleanBody(m[1]);
+    const value = cleanBody(m[2].replace(/<br\s*\/?>/gi, '\n'));
+    if (label && value) fields.push(`${label}: ${value}`);
+  }
+  if (fields.length >= 1) return fields.join('\n');
+
+  // Fallback when HTML structure was already partially flattened.
+  const plain = cleanBody(s)
+    .replace(/^WPForms\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const name = plain.match(/(?:Votre nom|Nom|Name)\s*:?\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,80}?)(?=\s+(?:Email|Téléphone|Telephone|Your Message|Message)\b|$)/i)?.[1]?.trim();
+  const email = plain.match(/(?:Email)\s*:?\s*([\w.+-]+@[\w.-]+\.\w+)/i)?.[1]
+    || plain.match(/([\w.+-]+@[\w.-]+\.\w+)/)?.[1];
+  const message = plain.match(/(?:Your Message|Message)\s*:?\s*(.+)$/i)?.[1]?.trim();
+  const lines = [];
+  if (name) lines.push(`Votre nom: ${name}`);
+  if (email) lines.push(`Email: ${email}`);
+  if (message) lines.push(`Message: ${message}`);
+  if (lines.length >= 2) return lines.join('\n');
+  return cleanBody(s).replace(/^WPForms\s*/i, '').trim();
+}
+
 export function isGarbageEmailBody(body, subject = '') {
   if (!body || body.length < 20) return true;
   if (looksLikeImagePayload(body)) return false;
-  const b = body.trim();
-  if (looksLikeBase64(b)) return false;
-  if (/^WPForms/i.test(b) || b.includes('@media only screen')) return true;
-  if (subject === 'New Entry: Contact Form 1' && b.includes('alpicois-laplagne.fr') && !b.includes('Bonjour')) return true;
-  if (/^[A-Za-z0-9+/=]{200,}$/.test(b.replace(/\s/g, ''))) return true;
+  const raw = body.trim();
+  if (looksLikeBase64(raw)) return false;
+  // WPForms HTML often looks like CSS noise until styles are stripped.
+  const looksWp = /^WPForms/i.test(raw) || raw.includes('@media only screen')
+    || (subject === 'New Entry: Contact Form 1' && /field-value|WPForms|alpicois-laplagne\.fr/i.test(raw));
+  if (looksWp) {
+    const plain = extractWpFormsPlainText(raw);
+    if (plain.length >= 40 && /@[\w.-]+\.\w+/.test(plain)) return false;
+    if (plain.length >= 60 && /(Votre nom|Email|Your Message|Message)/i.test(plain)) return false;
+    return true;
+  }
+  if (/^[A-Za-z0-9+/=]{200,}$/.test(raw.replace(/\s/g, ''))) return true;
   return false;
 }
 
 function cleanBody(str) {
   if (!str) return '';
   str = fixMojibake(str);
+  // Drop CSS/JS blocks before stripping tags (WPForms notifications).
+  str = str.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  str = str.replace(/<script[\s\S]*?<\/script>/gi, ' ');
   const utf8FixMap = {
     'Ã©': 'é', 'Ã¨': 'è', 'Ãª': 'ê', 'Ã«': 'ë',
     'Ã ': 'à', 'Ã¢': 'â', 'Ã¤': 'ä',
@@ -119,6 +167,8 @@ function cleanBody(str) {
   }
 
   return str
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
     .replace(/<[^>]*>/g, '')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -127,6 +177,7 @@ function cleanBody(str) {
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
     .replace(/&nbsp;/gi, ' ')
     .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/r�servation/gi, 'réservation')
     .replace(/int�ress�es/gi, 'intéressées')
@@ -170,35 +221,54 @@ export function extractBodyText(sourceBuffer) {
     }
 
     const textPlainParts = [];
+    const textHtmlParts = [];
     if (boundary) {
       const sections = raw.split(new RegExp(`--${escapeRegex(boundary)}`));
       for (const section of sections) {
-        if (section.includes('text/plain')) {
-          const parts = section.split(/\r?\n\r?\n/);
-          if (parts.length > 1) {
-            let content = parts.slice(1).join('\n\n').replace(/--\s*$/, '').trim();
-            if (section.includes('quoted-printable')) {
-              content = decodeQuotedPrintable(content);
-            }
-            if (/base64/i.test(section)) {
-              content = decodeBase64Body(content.replace(/\s/g, ''));
-            }
-            textPlainParts.push(content);
+        const isPlain = /Content-Type:\s*text\/plain/i.test(section);
+        const isHtml = /Content-Type:\s*text\/html/i.test(section);
+        if (!isPlain && !isHtml) continue;
+        const parts = section.split(/\r?\n\r?\n/);
+        if (parts.length > 1) {
+          let content = parts.slice(1).join('\n\n').replace(/--\s*$/, '').trim();
+          if (section.includes('quoted-printable')) {
+            content = decodeQuotedPrintable(content);
           }
+          if (/base64/i.test(section)) {
+            content = decodeBase64Body(content.replace(/\s/g, ''));
+          }
+          if (isPlain) textPlainParts.push(content);
+          else textHtmlParts.push(content);
         }
       }
     }
 
-    if (textPlainParts.length === 0) {
+    if (textPlainParts.length === 0 && textHtmlParts.length === 0) {
       const bodyMatch = raw.match(/(?:\r?\n\r?\n)([\s\S]*)/);
       if (bodyMatch) {
         let body = bodyMatch[1].replace(/^--\n.*$/gm, '').trim();
         if (/quoted-printable/i.test(raw)) body = decodeQuotedPrintable(body);
-        textPlainParts.push(body);
+        if (/<html|<body|WPForms|field-value/i.test(body)) textHtmlParts.push(body);
+        else textPlainParts.push(body);
       }
     }
 
-    return cleanBody(textPlainParts.join('\n\n')).substring(0, 50000);
+    const plainJoined = textPlainParts.join('\n\n');
+    const htmlJoined = textHtmlParts.join('\n\n');
+    // WPForms / HTML-only notifications: prefer structured field extraction.
+    if (/WPForms|field-value|@media only screen/i.test(htmlJoined || plainJoined)) {
+      const fromHtml = extractWpFormsPlainText(htmlJoined || plainJoined);
+      if (fromHtml.length > 40) return fromHtml.substring(0, 50000);
+    }
+    if (plainJoined.trim().length >= 20) {
+      return cleanBody(plainJoined).substring(0, 50000);
+    }
+    if (htmlJoined) {
+      const fromHtml = extractWpFormsPlainText(htmlJoined);
+      if (fromHtml.length > 20) return fromHtml.substring(0, 50000);
+      return cleanBody(htmlJoined).substring(0, 50000);
+    }
+    return cleanBody(plainJoined).substring(0, 50000);
   } catch {
     return '';
   }
@@ -216,6 +286,11 @@ export function cleanStoredBodyText(raw) {
 
   if (looksLikeBase64(raw.trim())) {
     return cleanBody(decodeBase64Body(raw)).substring(0, 50000);
+  }
+
+  if (/WPForms|field-value|@media only screen/i.test(raw)) {
+    const wp = extractWpFormsPlainText(raw);
+    if (wp.length > 40) return wp.substring(0, 50000);
   }
 
   const looksPolluted = /^--[=_\w]/m.test(raw)

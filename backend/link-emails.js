@@ -35,6 +35,35 @@ function shouldIgnore(email) {
   return false;
 }
 
+/** Guest email embedded in WPForms / site contact-form bodies (relay via barbier.famille). */
+function guestFromContactFormBody(row) {
+  const subject = row.subject || '';
+  const body = row.body_text || '';
+  const sender = extractEmails(row.sender)[0] || '';
+  const isForm = /New Entry:\s*Contact Form/i.test(subject)
+    || /WPForms|field-value|Votre nom|Your Message/i.test(body)
+    || /barbier\.famille@orange\.fr/i.test(sender);
+  if (!isForm) return null;
+
+  const mailto = body.match(/mailto:([\w.+-]+@[\w.-]+\.\w+)/i)?.[1];
+  if (mailto && !shouldIgnore(mailto.toLowerCase())) return mailto.toLowerCase();
+
+  const labelled = body.match(/(?:^|\n)\s*Email\s*:\s*([\w.+-]+@[\w.-]+\.\w+)/i)?.[1];
+  if (labelled && !shouldIgnore(labelled.toLowerCase())) return labelled.toLowerCase();
+
+  const emails = extractEmails(body).filter(e => !shouldIgnore(e) && !isInternalEmail(e));
+  return emails[0] || null;
+}
+
+function guestNameFromContactFormBody(row) {
+  const body = row.body_text || '';
+  const labelled = body.match(/(?:Votre nom|Nom|Name)\s*:\s*([^\n]+)/i)?.[1]?.trim();
+  if (labelled && labelled.length >= 2 && !labelled.includes('@')) return labelled;
+  const name = (row.sender_name || '').trim();
+  if (name && !name.includes('@') && !/^barbier/i.test(name)) return name;
+  return null;
+}
+
 function guestFromEmail(row) {
   const sender = extractEmails(row.sender)[0];
   const isSent = row.mailbox === 'INBOX.Sent';
@@ -43,6 +72,9 @@ function guestFromEmail(row) {
     const recipients = extractEmails(row.recipients);
     return recipients.find(e => !shouldIgnore(e)) || null;
   }
+  // Site form relay: real guest lives in the body, not the From: address.
+  const formGuest = guestFromContactFormBody(row);
+  if (formGuest) return formGuest;
   if (shouldIgnore(sender)) return null;
   return sender;
 }
@@ -53,6 +85,8 @@ function guestNameFromEmail(row, guestEmail) {
     if (m) return m[1].trim().replace(/"/g, '');
     return guestEmail?.split('@')[0] || 'Contact';
   }
+  const formName = guestNameFromContactFormBody(row);
+  if (formName) return formName;
   const name = (row.sender_name || '').trim();
   if (name && !name.includes('@')) return name;
   return guestEmail?.split('@')[0] || 'Contact';

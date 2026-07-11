@@ -1,10 +1,12 @@
-import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, Euro, History, AlertTriangle, Database, Eye, EyeOff, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Users, Settings, Mountain, ChevronLeft, ChevronRight, Lock, Unlock, Pencil, FileText, Euro, History, AlertTriangle, Database, Eye, EyeOff, RefreshCw, CheckCircle2, Menu, X } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { fetchApiHealth, fetchStaticDataMeta, getLastDataSource, markDataSourceLive, markRefreshStateHandled, readRefreshState, type ApiHealth, type StaticDataMeta, type StoredRefreshState } from '../data';
 import type { AdminActor } from '../lib/adminSession';
 import { routes, isNavActive, viewFromPath } from '../lib/routes';
 import type { ViewType } from '../types';
+
+const MOBILE_MQ = '(max-width: 768px)';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -59,12 +61,30 @@ export default function Layout({
   const [loginActor, setLoginActor] = useState<AdminActor>('gilles');
   const [showPassword, setShowPassword] = useState(false);
   const [health, setHealth] = useState<ApiHealth | null>(null);
+  const [healthReady, setHealthReady] = useState(false);
   const [staticMeta, setStaticMeta] = useState<StaticDataMeta | null>(null);
   const [usingStatic, setUsingStatic] = useState(false);
   const [globalSyncing, setGlobalSyncing] = useState(false);
   const [globalSyncMsg, setGlobalSyncMsg] = useState<string | null>(null);
   const [globalSyncPendingCount, setGlobalSyncPendingCount] = useState(0);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia(MOBILE_MQ).matches);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const syncHandledRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_MQ);
+    const onChange = () => {
+      setIsMobile(mq.matches);
+      if (!mq.matches) setMobileMenuOpen(false);
+    };
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!loginOpen) {
@@ -74,10 +94,11 @@ export default function Layout({
   }, [loginOpen]);
 
   useEffect(() => {
+    setHealthReady(false);
     fetchApiHealth().then(h => {
       setHealth(h);
       if (h?.ok) markDataSourceLive();
-    }).catch(() => setHealth(null));
+    }).catch(() => setHealth(null)).finally(() => setHealthReady(true));
     fetchStaticDataMeta().then(setStaticMeta).catch(() => setStaticMeta(null));
     const id = window.setInterval(() => setUsingStatic(getLastDataSource() === 'static'), 3000);
     setUsingStatic(getLastDataSource() === 'static');
@@ -145,9 +166,84 @@ export default function Layout({
     };
   }, [navigate]);
 
+  const go = (path: string) => {
+    navigate(path);
+    setMobileMenuOpen(false);
+  };
+
   return (
-    <div style={{ display: 'flex', width: '100%', minHeight: '100vh' }}>
-      {/* Sidebar */}
+    <div style={{ display: 'flex', width: '100%', minHeight: '100vh', flexDirection: isMobile ? 'column' : 'row' }}>
+      {/* Mobile top bar */}
+      {isMobile && (
+        <header style={{
+          position: 'sticky', top: 0, zIndex: 120,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 10, padding: '10px 14px', background: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border-color)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+              background: 'linear-gradient(135deg, var(--brand) 0%, var(--brand-light) 100%)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Mountain size={16} color="white" />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 14, fontWeight: 700, lineHeight: 1.2 }}>Alpicois</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.2 }}>La Plagne</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label={mobileMenuOpen ? 'Fermer le menu' : 'Ouvrir le menu'}
+            onClick={() => setMobileMenuOpen(v => !v)}
+            style={{
+              border: '1px solid var(--border-color)', background: 'var(--bg-body)',
+              borderRadius: 8, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--text-secondary)', cursor: 'pointer',
+            }}
+          >
+            {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
+        </header>
+      )}
+
+      {/* Mobile overflow menu */}
+      {isMobile && mobileMenuOpen && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 130, background: 'rgba(15,23,42,0.4)',
+        }} onClick={() => setMobileMenuOpen(false)}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: 57, right: 12, left: 12, maxWidth: 360, marginLeft: 'auto',
+              background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border-color)',
+              boxShadow: 'var(--shadow-lg)', padding: 10, display: 'flex', flexDirection: 'column', gap: 4,
+            }}
+          >
+            <button type="button" onClick={() => go(historiqueNav.path)} style={navButtonStyle(false, isNavActive(location.pathname, historiqueNav.view))}>
+              <History size={18} /> <span>{historiqueNav.label}</span>
+            </button>
+            <button type="button" onClick={() => go(routes.settings)} style={navButtonStyle(false, currentView === 'settings')}>
+              <Settings size={18} /> <span>Paramètres</span>
+            </button>
+            {onToggleAdmin && (
+              <button type="button" onClick={() => { onToggleAdmin(); setMobileMenuOpen(false); }} style={{
+                ...navButtonStyle(false, false),
+                color: isAdmin ? 'var(--warning)' : 'var(--text-secondary)',
+                background: isAdmin ? 'var(--warning-dim)' : 'transparent',
+              }}>
+                {isAdmin ? <Unlock size={18} /> : <Lock size={18} />}
+                <span>{isAdmin ? `Admin — ${adminActor === 'claire' ? 'Claire' : 'Gilles'}` : 'Admin OFF'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Desktop sidebar */}
+      {!isMobile && (
       <aside style={{
         width: collapsed ? 60 : 220,
         minWidth: collapsed ? 60 : 220,
@@ -317,9 +413,18 @@ export default function Layout({
           )}
         </div>
       </aside>
+      )}
 
       {/* Main content */}
-      <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-body)', position: 'relative' }}>
+      <main style={{
+        flex: 1,
+        overflow: 'auto',
+        background: 'var(--bg-body)',
+        position: 'relative',
+        paddingBottom: isMobile ? 72 : 0,
+        minWidth: 0,
+        width: '100%',
+      }}>
         {/* Admin mode indicator bar */}
         {isAdmin && (
           <div style={{
@@ -385,7 +490,7 @@ export default function Layout({
             )}
           </div>
         )}
-        {(health === null || (usingStatic && health?.ok)) && (
+        {healthReady && (health === null || (usingStatic && health?.ok)) && (
           <div style={{
             position: 'sticky',
             top: isAdmin ? (globalSyncing || globalSyncMsg ? 56 : 28) : 0,
@@ -432,6 +537,41 @@ export default function Layout({
         )}
         {children}
       </main>
+
+      {/* Mobile bottom navigation */}
+      {isMobile && (
+        <nav style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 110,
+          display: 'grid', gridTemplateColumns: `repeat(${mainNavItems.length}, 1fr)`,
+          gap: 2, padding: '6px 4px calc(6px + env(safe-area-inset-bottom))',
+          background: 'var(--bg-surface)', borderTop: '1px solid var(--border-color)',
+          boxShadow: '0 -4px 16px rgba(15,23,42,0.06)',
+        }}>
+          {mainNavItems.map(item => {
+            const Icon = item.icon;
+            const isActive = isNavActive(location.pathname, item.view);
+            return (
+              <button
+                key={item.view}
+                type="button"
+                onClick={() => go(item.path)}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  gap: 2, padding: '6px 2px', border: 'none', borderRadius: 8, cursor: 'pointer',
+                  background: isActive ? 'var(--brand-dim)' : 'transparent',
+                  color: isActive ? 'var(--brand)' : 'var(--text-muted)',
+                  fontSize: 9, fontWeight: isActive ? 700 : 500, lineHeight: 1.15,
+                }}
+              >
+                <Icon size={18} strokeWidth={isActive ? 2.5 : 2} />
+                <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {item.view === 'dashboard' ? 'Accueil' : item.label}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+      )}
 
       {loginOpen && (
         <div style={{
