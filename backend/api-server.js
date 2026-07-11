@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
-import { ensureDb, persistDb, persistDbDetailed, requirePersistDb, reloadDbFromBlob } from './database.js';
+import { ensureDb, ensureDbCurrent, persistDb, persistDbDetailed, requirePersistDb, reloadDbFromBlob } from './database.js';
 import {
   createAdminToken,
   verifyAdminToken,
@@ -63,7 +63,7 @@ function adminActorFromReq(req) {
 
 async function ensureFreshDb() {
   if (process.env.VERCEL === '1') {
-    db = await reloadDbFromBlob();
+    db = await ensureDbCurrent();
   }
   return db;
 }
@@ -133,7 +133,7 @@ async function runRefreshOnce(opts, audit) {
 
 app.use('/api', async (req, res, next) => {
   try {
-    db = await ensureDb();
+    db = process.env.VERCEL === '1' ? await ensureDbCurrent() : await ensureDb();
     next();
   } catch (err) {
     console.error('DB init error:', err);
@@ -216,6 +216,8 @@ app.post('/api/admin/persist-db', async (req, res) => {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
   try {
+    // Never upload a warm stale /tmp over a newer Blob — refresh first.
+    db = await ensureDbCurrent();
     const result = await persistDbDetailed();
     res.json({
       ok: result.ok,
@@ -224,6 +226,7 @@ app.post('/api/admin/persist-db', async (req, res) => {
       size: result.size,
       reason: result.reason,
       error: result.error,
+      fingerprint: result.fingerprint,
       message: result.ok ? 'Base persistée sur Blob' : (result.error || result.reason || 'Échec persistance'),
     });
   } catch (err) {
@@ -269,7 +272,7 @@ app.get('/api/audit', async (req, res) => {
   }
   try {
     if (process.env.VERCEL === '1') {
-      db = await reloadDbFromBlob();
+      db = await ensureDbCurrent();
     }
     const limit = parseInt(req.query.limit || '100', 10);
     const source = req.query.source;
