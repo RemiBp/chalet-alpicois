@@ -29,12 +29,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || join(__dirname, '..', 'emails.db');
 
 function extractPostalCode(text) {
-  const nl = text.match(/\b(\d{4}\s?[A-Z]{2})\s+[A-Za-zÀ-ÿ\s-]{2,30}/i);
-  if (nl) return nl[0].trim();
+  const nl = text.match(/\b(\d{4}\s?[A-Z]{2})\b/i);
+  if (nl) return nl[1].replace(/\s+/g, ' ').trim().toUpperCase();
   const labeled = text.match(/\b(?:code postal|cp|postcode|postal code|zip)\s*[:\-]?\s*(\d{4,5}(?:\s?[A-Z]{2})?)\b/i);
-  if (labeled) return labeled[1].trim();
-  const fr = text.match(/\b(\d{5})\s+[A-Za-zÀ-ÿ\s-]{2,25}/);
-  return fr?.[0]?.trim() || '';
+  if (labeled) return labeled[1].replace(/\s+/g, ' ').trim();
+  const fr = text.match(/\b(\d{5})\b/);
+  return fr?.[1]?.trim() || '';
+}
+
+function isPlausiblePostalCode(value) {
+  if (!value) return false;
+  const s = String(value).replace(/[\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (s.length > 12) return false;
+  return /^\d{4}\s?[A-Z]{2}$/i.test(s) || /^\d{5}$/.test(s);
+}
+
+function isPlausibleCountry(value) {
+  if (!value) return false;
+  const s = String(value).replace(/[\x00-\x1F]/g, ' ').trim();
+  if (s.length < 3 || s.length > 40) return false;
+  if (/^(bas|pays)$/i.test(s)) return false;
+  return /[A-Za-zÀ-ÿ]/.test(s);
 }
 
 function extractAddress(text) {
@@ -183,8 +198,8 @@ export function applyExtractedProfile(db, contactId) {
     ext.lastName || '',
     (ext.phone && isPlausiblePhone(ext.phone) ? ext.phone : '') || '',
     ext.address || '',
-    ext.postalCode || '',
-    ext.country || '',
+    (ext.postalCode && isPlausiblePostalCode(ext.postalCode) ? ext.postalCode : '') || '',
+    (ext.country && isPlausibleCountry(ext.country) ? ext.country : '') || '',
     ext.nationality || '',
     JSON.stringify(altEmails),
     JSON.stringify(newProfile),
