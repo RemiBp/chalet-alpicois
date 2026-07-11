@@ -25,9 +25,12 @@ JSON strict (pas de markdown) :
 
 Règles :
 - confirmed/paid seulement si contrat signé, acompte reçu, ou "je confirme" explicite.
-- Si plusieurs plages de dates, prends la plage la PLUS RÉCENTE et la PLUS LONGUE confirmée.
+- Si plusieurs plages de dates, ignore les simples demandes postérieures : prends la
+  plage explicitement confirmée/payée la plus récente. Si aucune n'est confirmée,
+  retourne status "inquiry" avec confidence "low".
 - priceEuros = montant total du séjour si écrit (ex. 4800€ pour 2 semaines), sinon 0.
-- confidence high si dates explicites "du X au Y mois année".`;
+- confidence high si dates explicites "du X au Y mois année" ET preuve de confirmation.
+- reason doit contenir la phrase précise qui justifie dates et statut.`;
 
 function diffNights(a, b) {
   return Math.max(0, Math.round((new Date(b) - new Date(a)) / 86400000));

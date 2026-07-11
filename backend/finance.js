@@ -42,6 +42,31 @@ function stayOverlapsWeek(stay, week) {
 }
 
 /**
+ * Le chalet ne peut accueillir qu'un client par semaine. Une donnée importée peut
+ * toutefois contenir deux fiches pour la même réservation (ex. fiche Excel puis
+ * fiche email). On conserve la ligne la plus fiable pour les totaux afin de ne
+ * jamais gonfler le chiffre d'affaires ; le doublon reste visible dans l'audit.
+ */
+function dedupeCalendarSlots(lines) {
+  const priority = { collected: 4, confirmed: 3, personal: 2, forecast: 1 };
+  const bySlot = new Map();
+  for (const line of lines) {
+    const existing = bySlot.get(line.checkIn);
+    if (!existing) {
+      bySlot.set(line.checkIn, line);
+      continue;
+    }
+    const score = priority[line.category] || 0;
+    const existingScore = priority[existing.category] || 0;
+    // À statut égal, un montant confirmé est plus fiable qu'une estimation.
+    if (score > existingScore || (score === existingScore && existing.estimatedAmount && !line.estimatedAmount)) {
+      bySlot.set(line.checkIn, line);
+    }
+  }
+  return [...bySlot.values()];
+}
+
+/**
  * @param {import('better-sqlite3').Database} db
  */
 export function getFinanceSummary(db, season = '2026-2027') {
@@ -190,7 +215,21 @@ export function getFinanceSummary(db, season = '2026-2027') {
     }
   }
 
+  const dedupedLines = dedupeCalendarSlots(lines);
+  lines.length = 0;
+  lines.push(...dedupedLines);
   lines.sort((a, b) => (a.checkIn || '').localeCompare(b.checkIn || ''));
+
+  // Recalcul après dédoublonnage : les compteurs alimentés pendant la collecte
+  // ne doivent pas inclure une fiche importée en double.
+  collected = lines.filter(l => l.category === 'collected').reduce((sum, l) => sum + l.amount, 0);
+  confirmedPending = lines.filter(l => l.category === 'confirmed').reduce((sum, l) => sum + l.amount, 0);
+  forecast = lines.filter(l => l.category === 'forecast').reduce((sum, l) => sum + l.amount, 0);
+  personalWeeks = lines.filter(l => l.personal).reduce((sum, l) => sum + (l.weekCount || 1), 0);
+  bookedCheckIns.clear();
+  for (const line of lines) {
+    if (line.category === 'collected' || line.category === 'confirmed') bookedCheckIns.add(line.checkIn);
+  }
 
   function weeksOf(line) {
     if (line.personal) return 0;

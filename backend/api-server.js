@@ -142,9 +142,10 @@ app.use('/api', async (req, res, next) => {
 });
 
 app.use('/api', (req, res, next) => {
-  if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
-  if (req.path === '/admin/login') return next();
-  if (req.path === '/documents/preview') return next();
+  // Ce tableau de bord contient les coordonnées et conversations de locataires.
+  // Toute lecture métier est privée ; santé, connexion et cron ont leur propre
+  // mécanisme d'accès et restent les seules exceptions.
+  if (['/health', '/admin/login', '/admin/status', '/cron/refresh'].includes(req.path)) return next();
   const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!verifyAdminToken(token)) {
     return res.status(401).json({ error: 'Mode admin requis — connectez-vous avec le mot de passe admin' });
@@ -242,7 +243,11 @@ app.post('/api/admin/reconcile-ai', async (req, res) => {
     return res.status(503).json({ error: 'DEEPSEEK_API_KEY non configuré sur le serveur' });
   }
   try {
-    const dryRun = req.body?.dryRun !== false && req.query.dryRun !== '0';
+    // Même un clic depuis l'interface reste une prévisualisation tant que
+    // l'auto-application n'est pas autorisée explicitement dans l'environnement.
+    const autoApplyAllowed = process.env.AI_RECONCILE_AUTO_APPLY === '1';
+    const dryRun = req.body?.dryRun !== false && req.query.dryRun !== '0'
+      || !autoApplyAllowed;
     const report = await reconcileBookingsWithAi(db, {
       limit: parseInt(req.body?.limit || req.query.limit || '20', 10),
       dryRun,

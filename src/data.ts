@@ -16,7 +16,11 @@ async function apiFetch<T>(url: string, retries = 2): Promise<T> {
   let lastErr: Error | null = null;
   for (let i = 0; i <= retries; i++) {
     try {
-      const res = await fetch(url, { cache: 'no-store' });
+      const token = getAdminToken();
+      const res = await fetch(url, {
+        cache: 'no-store',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       if (!res.ok) {
         const err = new Error(`API ${res.status}`);
         (err as Error & { status: number }).status = res.status;
@@ -54,6 +58,7 @@ async function readData<T>(staticPath: string, apiUrl: string): Promise<T> {
     lastDataSource = 'live';
     return await apiFetch<T>(apiUrl);
   } catch {
+    if (import.meta.env.PROD) throw new Error(`API indisponible pour ${apiUrl}`);
     lastDataSource = 'static';
     return staticFetch<T>(staticPath);
   }

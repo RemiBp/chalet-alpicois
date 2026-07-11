@@ -22,10 +22,14 @@ const samples = [
   'Content-Type: multipart/mixed\\n\\n--abc\\nContent-Type: text/plain\\n\\nBonjour test',
   'Photo =C3=A9 =0A avec quoted-printable',
   'A'.repeat(5000),
+  'ûïôÓßÏGsõóÓ\\x01ÓÞz×ã_z\\x04\\x1eø\\x07\\x00\\x07Ðº\\x03q',
 ];
 
-for (const s of samples) {
-  classifyEmailContent(s);
+for (const [index, s] of samples.entries()) {
+  const info = classifyEmailContent(s);
+  if (index === samples.length - 1 && info.kind !== 'encrypted') {
+    throw new Error('binary body classified as ' + info.kind);
+  }
   cleanEmailBody(s);
   emailBodyPreview(s, 2000);
 }

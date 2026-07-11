@@ -108,6 +108,10 @@ function looksLikeEncryptedOrBinary(text) {
   }
   const asciiLetters = (sample.match(/[a-zA-Z]/g) || []).length;
   const words = (sample.match(/[a-zA-ZÀ-ÿ]{3,}/g) || []).length;
+  // Pièce jointe/S-MIME extraite comme texte : peu de mots, mais parfois un
+  // ratio de contrôles inférieur à 12 %. Ne jamais la présenter comme un mail.
+  if (weird / sample.length > 0.08 && spaces <= 1) return true;
+  if (weird / sample.length > 0.04 && words < 3) return true;
   if (weird / sample.length > 0.12) return true;
   if (sample.length > 40 && spaces < 3 && words < 3) return true;
   if (text.length < 220 && asciiLetters < 12 && spaces < 4 && /[^\x09\x0A\x0D\x20-\x7E]/.test(sample)) return true;

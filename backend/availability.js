@@ -155,6 +155,11 @@ export function enrichWeekWithAvailability(db, week, season) {
     availability: availability.status,
     availabilityLabel: availability.label,
     suggestedPrice: estimateWeeklyPrice(week.checkIn, season || computeSeasonFromDate(week.checkIn)),
+    suggestedTotalPrice: estimateStayPrice(
+      week.checkIn,
+      week.checkOut,
+      season || computeSeasonFromDate(week.checkIn),
+    ),
     alternatives: availability.status === 'unavailable'
       ? findAlternativeWeeks(db, week.checkIn, week.checkOut, season || computeSeasonFromDate(week.checkIn))
       : findAlternativeWeeks(db, week.checkIn, week.checkOut, season || computeSeasonFromDate(week.checkIn), 4)

@@ -411,7 +411,7 @@ function InquiriesPanel({
         type: 'available',
         checkIn: rw.checkIn,
         checkOut: rw.checkOut,
-        price: rw.suggestedPrice,
+        price: rw.suggestedTotalPrice ?? rw.suggestedPrice,
         adults: rw.adults || contact.profileJson?.typicalAdults,
         lang,
       });
@@ -436,7 +436,7 @@ function InquiriesPanel({
         type: 'available',
         checkIn: rw.checkIn,
         checkOut: rw.checkOut,
-        price: rw.suggestedPrice,
+        price: rw.suggestedTotalPrice ?? rw.suggestedPrice,
         adults: rw.adults || contact.profileJson?.typicalAdults,
       });
       setMailPreview(p);
@@ -450,7 +450,7 @@ function InquiriesPanel({
     if (!isAdmin || rw.id.startsWith('extracted') || rw.id === 'detected') return;
     setSyncing(true);
     try {
-      await updateRequestedWeek(rw.id, { status: 'booked', price: rw.suggestedPrice });
+      await updateRequestedWeek(rw.id, { status: 'booked', price: rw.suggestedTotalPrice ?? rw.suggestedPrice });
       const res = await fetchContactInquiries(contactId);
       onWeeksChange(res.weeks);
     } catch (e) {
@@ -602,7 +602,9 @@ function InquiriesPanel({
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
                   {(rw.adults || rw.children) ? `${rw.adults || 0} adultes${rw.children ? `, ${rw.children} enfants` : ''}` : ''}
-                  {rw.suggestedPrice ? ` · ${fmtPrice(rw.suggestedPrice)}/sem.` : ''}
+                  {rw.suggestedTotalPrice
+                    ? ` · ${fmtPrice(rw.suggestedTotalPrice)} pour le séjour`
+                    : rw.suggestedPrice ? ` · ${fmtPrice(rw.suggestedPrice)}/sem.` : ''}
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>

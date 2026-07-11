@@ -30,8 +30,33 @@ function AppRoutes() {
   } = useAdminMode();
 
   useEffect(() => {
-    prefetchContacts();
-  }, []);
+    if (isAdmin) prefetchContacts();
+  }, [isAdmin]);
+
+  if (!isAdmin) {
+    return (
+      <Layout
+        isAdmin={isAdmin}
+        adminActor={adminActor}
+        onToggleAdmin={toggleAdmin}
+        loginOpen={loginOpen}
+        loginError={loginError}
+        loginLoading={loginLoading}
+        onAdminLogin={submitLogin}
+        onAdminLoginCancel={cancelLogin}
+      >
+        <main style={{ maxWidth: 560, margin: '12vh auto', padding: 24, textAlign: 'center' }}>
+          <h1 style={{ fontSize: 24, marginBottom: 10 }}>Espace privé Alpicois</h1>
+          <p style={{ color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 20 }}>
+            Connectez-vous pour consulter les séjours, messages et coordonnées des locataires.
+          </p>
+          <button type="button" onClick={toggleAdmin} style={{ padding: '10px 16px', border: 'none', borderRadius: 9, background: 'var(--brand)', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
+            Se connecter
+          </button>
+        </main>
+      </Layout>
+    );
+  }
 
   return (
     <Layout

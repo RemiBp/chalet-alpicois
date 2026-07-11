@@ -69,7 +69,9 @@ export async function runRefreshPipeline(db, opts = {}) {
     try {
       report.aiReconcile = await reconcileBookingsWithAi(db, {
         limit: parseInt(process.env.AI_RECONCILE_LIMIT || '15', 10),
-        dryRun: process.env.AI_RECONCILE_DRY_RUN === '1',
+        // Une réservation est une donnée contractuelle : l'IA détecte les écarts,
+        // mais ne les applique jamais sans opt-in explicite de l'exploitant.
+        dryRun: process.env.AI_RECONCILE_AUTO_APPLY !== '1',
       });
     } catch (err) {
       report.aiReconcile = { error: err.message };

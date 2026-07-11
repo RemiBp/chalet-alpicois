@@ -125,6 +125,10 @@ function looksLikeEncryptedOrBinary(text: string): boolean {
   }
   const asciiLetters = (sample.match(/[a-zA-Z]/g) || []).length;
   const words = (sample.match(/[a-zA-ZÀ-ÿ]{3,}/g) || []).length;
+  // Un corps qui combine octets de contrôle et presque aucun mot est un binaire
+  // mal extrait, même si son ratio reste sous 12 % (cas S/MIME observé).
+  if (weird / sample.length > 0.08 && spaces <= 1) return true;
+  if (weird / sample.length > 0.04 && words < 3) return true;
   if (weird / sample.length > 0.12) return true;
   // Dense binary / misdecoded attachment: almost no whitespace, few real words
   if (sample.length > 40 && spaces < 3 && words < 3) return true;

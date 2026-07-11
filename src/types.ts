@@ -100,6 +100,8 @@ export interface RequestedWeek {
   availability?: 'available' | 'unavailable' | 'unknown';
   availabilityLabel?: string;
   suggestedPrice?: number;
+  /** Tarif indicatif total pour toute la période demandée. */
+  suggestedTotalPrice?: number;
   alternatives?: AlternativeWeek[];
   extractedFromEmail?: boolean;
 }
