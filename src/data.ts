@@ -741,6 +741,7 @@ export interface RecentSignal {
   confidence?: 'high' | 'medium' | 'low';
   emailDate: string;
   subject: string;
+  emailId?: string;
 }
 
 export async function fetchRecentSignals(days = 45): Promise<RecentSignal[]> {

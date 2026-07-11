@@ -719,6 +719,35 @@ a:hover {
   min-width: 160px;
 }
 
+.dashboard-signals-row--clickable {
+  cursor: pointer;
+}
+
+.dashboard-signals-row--clickable:hover td {
+  background: color-mix(in srgb, var(--brand) 6%, transparent);
+}
+
+.dashboard-mail-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) 1fr auto;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-body);
+  border: 1px solid var(--border-subtle);
+  align-items: start;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dashboard-mail-row:hover {
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--brand) 5%, var(--bg-body));
+}
+
 .dashboard-signals-label {
   color: var(--text-secondary);
   line-height: 1.45;

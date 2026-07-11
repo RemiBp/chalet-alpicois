@@ -335,7 +335,13 @@ export default function AuditHistoryPanel({
                 </div>
                 <div style={{ marginTop: 8 }}>
                   {entry.contactId && (
-                    <button type="button" onClick={e => { e.stopPropagation(); navigate(routes.client(entry.contactId)); }}
+                    <button type="button" onClick={e => {
+                      e.stopPropagation();
+                      const mailId = entry.payload?.emailId != null ? String(entry.payload.emailId) : undefined;
+                      navigate(mailId
+                        ? routes.client(entry.contactId, { mail: mailId })
+                        : routes.client(entry.contactId));
+                    }}
                       style={{ border: 'none', background: 'transparent', color: 'var(--brand)', fontSize: 11, fontWeight: 750, cursor: 'pointer', padding: 0 }}>
                       ouvrir la fiche
                     </button>

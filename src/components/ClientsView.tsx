@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Search, Users, Mail, ArrowLeft, Loader2, MessageSquare, Save,
   ChevronRight, Phone, MapPin, Globe, CalendarDays, Tag, Sparkles,
@@ -220,10 +220,11 @@ function Field({ label, value, onChange, type = 'text', multiline = false, place
 
 // ─── Conversation ────────────────────────────────────────────────────────────
 
-function ConversationThread({ contactId }: { contactId: string }) {
+function ConversationThread({ contactId, focusEmailId }: { contactId: string; focusEmailId?: string | null }) {
   const [emails, setEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(focusEmailId || null);
+  const focusRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     fetchContactEmails(contactId).then(data => {
@@ -231,6 +232,15 @@ function ConversationThread({ contactId }: { contactId: string }) {
       setLoading(false);
     });
   }, [contactId]);
+
+  useEffect(() => {
+    if (!focusEmailId || loading) return;
+    setExpanded(focusEmailId);
+    const t = window.setTimeout(() => {
+      focusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    return () => window.clearTimeout(t);
+  }, [focusEmailId, loading, emails.length]);
 
   if (loading) return <div style={{ padding: 16, fontSize: 12, color: 'var(--text-muted)', display: 'flex', gap: 6 }}><Loader2 size={14} className="spin" /> Chargement…</div>;
   if (!emails.length) return <p style={{ fontSize: 12, color: 'var(--text-muted)', padding: 16 }}>Aucun message.</p>;
@@ -242,8 +252,18 @@ function ConversationThread({ contactId }: { contactId: string }) {
         const open = expanded === email.id;
         const content = classifyEmailContent(email.bodyText || '');
         const condensed = isCondensedEmail(email.bodyText || '');
+        const isFocus = focusEmailId === email.id;
         return (
-          <div key={email.id} style={{ borderRadius: 10, border: `1px solid ${isSent ? 'rgba(124,58,237,0.3)' : condensed ? 'var(--border-subtle)' : 'var(--border-color)'}`, background: isSent ? 'rgba(124,58,237,0.04)' : condensed ? 'var(--bg-surface)' : 'var(--bg-body)' }}>
+          <div
+            key={email.id}
+            ref={isFocus ? focusRef : undefined}
+            style={{
+              borderRadius: 10,
+              border: `1px solid ${isFocus ? 'var(--brand)' : isSent ? 'rgba(124,58,237,0.3)' : condensed ? 'var(--border-subtle)' : 'var(--border-color)'}`,
+              background: isSent ? 'rgba(124,58,237,0.04)' : condensed ? 'var(--bg-surface)' : 'var(--bg-body)',
+              boxShadow: isFocus ? '0 0 0 2px color-mix(in srgb, var(--brand) 25%, transparent)' : undefined,
+            }}
+          >
             <button type="button" onClick={() => setExpanded(open ? null : email.id)} style={{ width: '100%', textAlign: 'left', padding: '11px 13px', border: 'none', background: 'transparent', cursor: 'pointer' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -714,6 +734,8 @@ function InquiriesPanel({
 function ContactDetailView({ contactId, onBack, onMerged, isAdmin }: {
   contactId: string; onBack: () => void; onMerged?: (targetId: string) => void; isAdmin: boolean;
 }) {
+  const [searchParams] = useSearchParams();
+  const focusEmailId = searchParams.get('mail');
   const [contact, setContact] = useState<Contact | null>(null);
   const [guestEmails, setGuestEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1152,7 +1174,7 @@ function ContactDetailView({ contactId, onBack, onMerged, isAdmin }: {
           {/* Col 3 — Conversation */}
           <div style={{ minWidth: 0 }}>
             <Card title={`Conversation (${contact.messageCount || 0})`} icon={Mail}>
-              <ConversationThread contactId={contact.id} />
+              <ConversationThread contactId={contact.id} focusEmailId={focusEmailId} />
             </Card>
           </div>
         </div>

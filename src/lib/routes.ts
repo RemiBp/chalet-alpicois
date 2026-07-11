@@ -7,7 +7,11 @@ export const routes = {
   dashboard: '/',
   calendar: '/calendar',
   clients: '/clients',
-  client: (id: string) => `/clients/${encodeURIComponent(id)}`,
+  client: (id: string, opts?: { mail?: string }) => {
+    const base = `/clients/${encodeURIComponent(id)}`;
+    if (opts?.mail) return `${base}?mail=${encodeURIComponent(opts.mail)}`;
+    return base;
+  },
   documents: '/documents/messages',
   documentsTab: (tab: DocumentsTab) => `/documents/${tab}`,
   finance: '/finance',

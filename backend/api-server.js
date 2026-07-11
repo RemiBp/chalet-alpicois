@@ -491,6 +491,7 @@ app.get('/api/signals/recent', (req, res) => {
         confidence: signal.strength >= 90 ? 'high' : signal.strength >= 70 ? 'medium' : 'low',
         emailDate: email.date,
         subject: email.subject,
+        emailId: String(email.id),
       });
       if (signals.length >= limit) break;
     }
