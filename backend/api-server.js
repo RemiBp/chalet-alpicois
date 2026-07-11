@@ -47,7 +47,7 @@ import { isInternalEmail } from './host-filter.js';
 import { mergeContacts } from './merge-contacts.js';
 import { applyExtractedProfile } from './extract-profile.js';
 import { listAuditLog, appendAudit } from './audit-log.js';
-import { resolveSyncProposals, countPendingProposals } from './sync-proposals.js';
+import { resolveSyncProposals, countPendingProposals, rejectPendingByField } from './sync-proposals.js';
 import { getDataDoubts } from './doubts.js';
 import { listStayProgressForContact, upsertStayProgress } from './stay-progress.js';
 
@@ -289,11 +289,18 @@ app.post('/api/audit/resolve', async (req, res) => {
     return res.status(401).json({ error: 'Authentification admin requise' });
   }
   try {
+    const actor = adminActorFromReq(req);
+    // Bulk dismiss soft mail-review cards without touching concrete stay/contact updates.
+    if (req.body?.rejectField === 'mailReview' || req.body?.rejectAllMailReviews === true) {
+      const out = rejectPendingByField(db, 'mailReview', actor);
+      await requirePersistDb();
+      return res.json({ ok: true, rejected: out.rejected, results: out.results, pendingCount: out.pendingCount });
+    }
     const decisions = req.body?.decisions;
     if (!Array.isArray(decisions) || decisions.length === 0) {
-      return res.status(400).json({ error: 'decisions[] requis' });
+      return res.status(400).json({ error: 'decisions[] requis (ou rejectField: mailReview)' });
     }
-    const results = resolveSyncProposals(db, decisions, adminActorFromReq(req));
+    const results = resolveSyncProposals(db, decisions, actor);
     await requirePersistDb();
     res.json({ ok: true, results, pendingCount: countPendingProposals(db) });
   } catch (err) {

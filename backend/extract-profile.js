@@ -21,6 +21,7 @@ import {
   guestCorpusFromEmails,
   extractCoordinatesFromText,
   extractPhone,
+  isPlausiblePhone,
   mergeExtractedFields,
 } from './contact-coords.js';
 
@@ -180,7 +181,7 @@ export function applyExtractedProfile(db, contactId) {
   `).run(
     ext.firstName || '',
     ext.lastName || '',
-    ext.phone || '',
+    (ext.phone && isPlausiblePhone(ext.phone) ? ext.phone : '') || '',
     ext.address || '',
     ext.postalCode || '',
     ext.country || '',
@@ -216,18 +217,34 @@ export function enrichProfilesFromEmails(db, { limit = 500 } = {}) {
   let filledNationality = 0;
   let fixedNames = 0;
   let filledCoords = 0;
+  let clearedBadPhones = 0;
+
+  // Clear phones polluted by bad extraction (letters/words in the value).
+  const badPhones = db.prepare(`
+    SELECT id, phone FROM contacts
+    WHERE phone IS NOT NULL AND phone != ''
+      AND phone GLOB '*[A-Za-zÀ-ÿ]*'
+      AND phone GLOB '*[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ]*'
+  `).all();
+  const clearPhone = db.prepare(`UPDATE contacts SET phone = '', updated_at = datetime('now') WHERE id = ?`);
+  for (const row of badPhones) {
+    if (!isPlausiblePhone(row.phone)) {
+      clearPhone.run(row.id);
+      clearedBadPhones++;
+    }
+  }
 
   for (const c of contacts) {
     if (isInternalContact(c)) continue;
     const result = applyExtractedProfile(db, c.id);
     if (!result.ok) continue;
     if (result.extracted?.nationality) filledNationality++;
-    if (result.extracted?.address || result.extracted?.phone) filledCoords++;
+    if (result.extracted?.address || (result.extracted?.phone && isPlausiblePhone(result.extracted.phone))) filledCoords++;
     const updated = db.prepare('SELECT name FROM contacts WHERE id = ?').get(c.id);
     if (updated?.name !== c.name) fixedNames++;
   }
 
-  return { contacts: contacts.length, filledNationality, fixedNames, filledCoords };
+  return { contacts: contacts.length, filledNationality, fixedNames, filledCoords, clearedBadPhones };
 }
 
 async function main() {

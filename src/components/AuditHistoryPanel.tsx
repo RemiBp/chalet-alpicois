@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, User, Bot, RefreshCw, Check, X, Mail, CalendarDays, ChevronDown, ChevronRight } from 'lucide-react';
 import {
-  fetchAuditLog, resolveAuditProposals, type AuditEntry,
+  fetchAuditLog, resolveAuditProposals, rejectAllMailReviewProposals, type AuditEntry,
 } from '../data';
 import { routes } from '../lib/routes';
 
@@ -90,7 +90,7 @@ export default function AuditHistoryPanel({
     setLoading(true);
     const pendingOnly = filter === 'automatic';
     const source = filter === 'all' ? undefined : filter;
-    fetchAuditLog(150, source, pendingOnly)
+    fetchAuditLog(500, source, pendingOnly)
       .then(({ entries: list, pendingCount: n }) => {
         // Concrete stay/contact updates first; soft mail reviews last (can wait).
         const rank = (e: AuditEntry) => {
@@ -120,6 +120,12 @@ export default function AuditHistoryPanel({
   }, [filter, isAdmin]);
 
   const pendingEntries = entries.filter(e => e.validationStatus === 'pending');
+  const pendingMailReviews = pendingEntries.filter(e =>
+    e.payload?.field === 'mailReview' || e.entityType === 'mail_review',
+  );
+  const pendingConcrete = pendingEntries.filter(e =>
+    e.payload?.field !== 'mailReview' && e.entityType !== 'mail_review',
+  );
 
   async function resolveOne(entry: AuditEntry, approved: boolean) {
     setSubmitting(true);
@@ -137,6 +143,27 @@ export default function AuditHistoryPanel({
     }
   }
 
+  async function archiveMailReviews() {
+    if (!isAdmin || submitting) return;
+    const ok = window.confirm(
+      'Archiver toutes les propositions « Mail à qualifier » ?\nLes mises à jour concrètes (téléphone, séjour, contrat…) restent à valider.',
+    );
+    if (!ok) return;
+    setSubmitting(true);
+    setMsg(null);
+    try {
+      const res = await rejectAllMailReviewProposals();
+      setMsg(`${res.rejected} revue(s) mail archivée(s) — ${res.pendingCount} proposition(s) restantes.`);
+      load();
+      onPendingResolved?.();
+      setPendingCount(res.pendingCount);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Erreur archivage');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   const filters: { id: SourceFilter; label: string }[] = [
     { id: 'automatic', label: `Automatique à valider${pendingCount ? ` (${pendingCount})` : ''}` },
     { id: 'all', label: 'Tout' },
@@ -147,6 +174,21 @@ export default function AuditHistoryPanel({
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
+        {filter === 'automatic' && pendingMailReviews.length > 0 && (
+          <button
+            type="button"
+            onClick={archiveMailReviews}
+            disabled={submitting || loading}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8,
+              border: '1px solid rgba(220,38,38,0.25)', background: 'rgba(254,242,242,0.9)',
+              color: '#b91c1c', fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            {submitting ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
+            Archiver les revues mail ({pendingMailReviews.length})
+          </button>
+        )}
         <button type="button" onClick={load} disabled={loading}
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-surface)', fontSize: 11, cursor: 'pointer' }}>
           {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
@@ -170,7 +212,8 @@ export default function AuditHistoryPanel({
 
       {filter === 'automatic' && pendingEntries.length > 0 && (
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
-          Propositions automatiques détectées depuis les derniers mails. Chaque carte indique la mise à jour souhaitée, le mail source et le séjour concerné.
+          {pendingConcrete.length} mise(s) à jour concrète(s) · {pendingMailReviews.length} mail(s) à qualifier.
+          Validez d’abord les mises à jour, ou archivez les revues mail pour alléger la file.
         </p>
       )}
 

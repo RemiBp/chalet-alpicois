@@ -7,6 +7,7 @@ import { upsertStayProgress, getStayProgress } from './stay-progress.js';
 import { extractInquiryBest } from './extract-inquiry.js';
 import { isNoiseEmail } from './price-extract.js';
 import { cleanStoredBodyText } from './email-body.js';
+import { extractPhone, isPlausiblePhone } from './contact-coords.js';
 
 const PROGRESS_LABELS = {
   contractSigned: 'Contrat signé',
@@ -304,10 +305,12 @@ function suggestedReviewAction(text) {
 function detectContactHints(email) {
   const text = `${email.subject || ''}\n${email.body_text || ''}`;
   const hints = [];
-  const phone = text.match(/(?:phone|t[eé]l(?:[ée]phone)?|mobile|portable)\s*(?:number|n°|:|-)?\s*([+0-9][0-9\s().-]{7,})/i)?.[1]
-    || text.match(/\b(00\d{8,}|(?:\+\d{1,3}\s*)?\d[\d\s().-]{8,})\b/)?.[1];
-  const cleanPhone = phone?.replace(/\s+/g, ' ').trim();
-  if (cleanPhone && !String(email.contact_phone || '').replace(/\s+/g, '').includes(cleanPhone.replace(/\s+/g, ''))) {
+  const cleanPhone = extractPhone(text);
+  if (
+    cleanPhone
+    && isPlausiblePhone(cleanPhone)
+    && !String(email.contact_phone || '').replace(/\s+/g, '').includes(cleanPhone.replace(/\s+/g, ''))
+  ) {
     hints.push({ field: 'phone', proposed: cleanPhone, label: 'Téléphone à ajouter' });
   }
 
@@ -316,7 +319,12 @@ function detectContactHints(email) {
     ?.split(/\b(?:phone|t[eé]l(?:[ée]phone)?|mobile|portable|best\s+wishes|mail)\b/i)[0]
     ?.replace(/\s+/g, ' ')
     ?.trim();
-  if (address && !String(email.contact_address || '').toLowerCase().includes(address.toLowerCase().slice(0, 16))) {
+  if (
+    address
+    && address.length >= 8
+    && !/[?]{2,}/.test(address)
+    && !String(email.contact_address || '').toLowerCase().includes(address.toLowerCase().slice(0, 16))
+  ) {
     hints.push({ field: 'address', proposed: address, label: 'Adresse à ajouter' });
   }
 
@@ -417,17 +425,21 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
 function applyContactProfileProposal(db, contactId, payload) {
   if (!contactId) return;
   if (payload.field === 'phone' && payload.proposed) {
+    const phone = String(payload.proposed).trim();
+    if (!isPlausiblePhone(phone)) return;
     db.prepare(`
       UPDATE contacts SET phone = COALESCE(NULLIF(phone, ''), ?), updated_at = datetime('now')
       WHERE id = ?
-    `).run(String(payload.proposed), contactId);
+    `).run(phone, contactId);
     return;
   }
   if (payload.field === 'address' && payload.proposed) {
+    const address = String(payload.proposed).trim();
+    if (address.length < 8) return;
     db.prepare(`
       UPDATE contacts SET address = COALESCE(NULLIF(address, ''), ?), updated_at = datetime('now')
       WHERE id = ?
-    `).run(String(payload.proposed), contactId);
+    `).run(address, contactId);
     return;
   }
   if (payload.field === 'groupComposition' && payload.proposed && typeof payload.proposed === 'object') {
@@ -450,4 +462,36 @@ function applyContactProfileProposal(db, contactId, payload) {
 export function listPendingProposals(db, limit = 100) {
   return listAuditLog(db, { limit, source: 'automatic' })
     .filter(e => e.action === 'sync_proposal' && e.validationStatus === 'pending');
+}
+
+/**
+ * Reject all pending sync proposals for a given payload field (e.g. mailReview).
+ * Used to clear soft "mail to qualify" backlog without touching concrete updates.
+ */
+export function rejectPendingByField(db, field, actor = 'gilles') {
+  ensureValidationColumn(db);
+  const rows = db.prepare(`
+    SELECT id, payload_json FROM audit_log
+    WHERE validation_status = 'pending' AND action = 'sync_proposal'
+    ORDER BY created_at DESC
+    LIMIT 2000
+  `).all();
+
+  const decisions = [];
+  for (const row of rows) {
+    let payload = {};
+    try { payload = JSON.parse(row.payload_json || '{}'); } catch { /* ignore */ }
+    if (payload.field === field || (field === 'mailReview' && String(row.id).includes(':mailReview'))) {
+      decisions.push({ id: row.id, approved: false });
+    }
+  }
+  if (!decisions.length) {
+    return { rejected: 0, pendingCount: countPendingProposals(db), results: [] };
+  }
+  const results = resolveSyncProposals(db, decisions, actor);
+  return {
+    rejected: results.filter(r => r.ok).length,
+    pendingCount: countPendingProposals(db),
+    results,
+  };
 }

@@ -375,6 +375,18 @@ export async function resolveAuditProposals(
   return data;
 }
 
+/** Bulk-dismiss soft "mail to qualify" proposals (keeps concrete stay/contact updates). */
+export async function rejectAllMailReviewProposals(): Promise<{ ok: boolean; pendingCount: number; rejected: number }> {
+  const res = await apiAuthFetch(`${API_BASE}/audit/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ rejectField: 'mailReview' }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({})) as { error?: string }).error || `Reject mail reviews ${res.status}`);
+  const data = await res.json() as { ok: boolean; pendingCount: number; rejected?: number };
+  invalidateContactsCache();
+  return { ok: data.ok, pendingCount: data.pendingCount ?? 0, rejected: data.rejected ?? 0 };
+}
+
 // ─── MAIL TEMPLATES & SUIVI ─────────────────────
 
 export interface MailTemplateContent {

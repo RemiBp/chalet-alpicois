@@ -119,9 +119,22 @@ function nationalityFromCountry(country) {
   return NATIONALITY_FROM_COUNTRY[country] || '';
 }
 
+export function isPlausiblePhone(value) {
+  if (!value) return false;
+  const s = String(value).replace(/\s+/g, ' ').trim();
+  if (!s) return false;
+  // Reject polluted captures like "éphone, mail). Je les…"
+  if (/[a-zA-Zà-ÿ]{2,}/i.test(s)) return false;
+  const digits = s.replace(/\D/g, '');
+  return digits.length >= 8 && digits.length <= 15;
+}
+
 export function extractPhone(text) {
-  const labeled = text.match(/(?:t[ée]l\.?|tel\.?|phone|mobile|mob\.?|gsm)\s*[:\-]?\s*((?:\+|00)\d[\d\s.\-]{7,18}|\d[\d\s.\-]{8,18})/i);
-  if (labeled && !isHostContentLine(labeled[1])) {
+  // Prefer full labels — bare "tél" must not match inside "téléphone" and swallow the rest.
+  const labeled = text.match(
+    /(?:t[ée]l[ée]phone|telephone|t[ée]l\.?|tel\.?|phone|mobile|mob\.?|gsm|portable)\s*(?:number|n[°o.]|nº|:|-)?\s*((?:\+|00)?\d[\d\s().\-]{6,18})/i,
+  );
+  if (labeled && !isHostContentLine(labeled[1]) && isPlausiblePhone(labeled[1])) {
     return labeled[1].replace(/\s+/g, ' ').trim();
   }
   const patterns = [
@@ -134,7 +147,7 @@ export function extractPhone(text) {
   ];
   for (const p of patterns) {
     const m = text.match(p);
-    if (m && !isHostContentLine(m[0])) return m[0].replace(/\s+/g, ' ').trim();
+    if (m && !isHostContentLine(m[0]) && isPlausiblePhone(m[0])) return m[0].replace(/\s+/g, ' ').trim();
   }
   return '';
 }
@@ -158,9 +171,9 @@ function parseCoordinatesBlock(block) {
   const result = { name: '', address: '', postalCode: '', city: '', country: '', phone: '', email: '' };
 
   for (const line of lines) {
-    const phone = line.match(/(?:t[ée]l\.?|tel\.?|phone|mobile)\s*[:\-]?\s*(.+)/i);
+    const phone = extractPhone(line);
     if (phone) {
-      result.phone = phone[1].replace(/\s+/g, ' ').trim();
+      result.phone = phone;
       continue;
     }
     const mail = line.match(/(?:e-?mail|email|courriel)\s*[:\-]?\s*(.+)/i);

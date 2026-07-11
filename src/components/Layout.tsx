@@ -165,10 +165,13 @@ export default function Layout({
       setGlobalSyncing(false);
       setGlobalSyncMsg(describeComplete(report));
       setGlobalSyncPendingCount(pending);
-      syncHandledRef.current = Date.now();
-      markRefreshStateHandled();
-      if (pending > 0) {
-        navigate(`${routes.historique}?sync=1`);
+      const handledKey = Date.now();
+      if (syncHandledRef.current !== handledKey) {
+        syncHandledRef.current = handledKey;
+        markRefreshStateHandled();
+        if (pending > 0) {
+          navigate(`${routes.historique}?sync=1`);
+        }
       }
     };
     const onError = (event: Event) => {
