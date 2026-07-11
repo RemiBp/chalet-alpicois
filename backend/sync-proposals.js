@@ -757,11 +757,11 @@ export function rejectPendingByField(db, field, actor = 'gilles') {
   };
 }
 
-/** Drop pending host/junk phone & address proposals. */
+/** Drop pending host/junk phone & address proposals, plus already-applied progress. */
 export function rejectInvalidPhoneProposals(db, actor = 'gilles') {
   ensureValidationColumn(db);
   const rows = db.prepare(`
-    SELECT id, payload_json FROM audit_log
+    SELECT id, contact_id, payload_json FROM audit_log
     WHERE validation_status = 'pending' AND action = 'sync_proposal'
     ORDER BY created_at DESC
     LIMIT 2000
@@ -773,9 +773,26 @@ export function rejectInvalidPhoneProposals(db, actor = 'gilles') {
     if (payload.field === 'phone') {
       if (!isPlausiblePhone(payload.proposed) || isHostPhone(payload.proposed)) {
         decisions.push({ id: row.id, approved: false });
+        continue;
       }
     } else if (payload.field === 'address') {
       if (!isPlausibleGuestAddress(payload.proposed)) {
+        decisions.push({ id: row.id, approved: false });
+        continue;
+      }
+    }
+
+    // Already reflected on stay_progress → dismiss stale queue items
+    if (
+      payload.checkIn
+      && payload.checkOut
+      && row.contact_id
+      && ['contractSigned', 'depositPaid', 'balancePaid', 'insuranceReceived', 'idReceived',
+        'depositGuaranteePaid', 'depositGuaranteeReturned', 'contractSent',
+        'depositInvoiceSent', 'balanceInvoiceSent', 'mailSteps'].includes(payload.field)
+    ) {
+      const progress = getStayProgress(db, row.contact_id, payload.checkIn, payload.checkOut);
+      if (progressAlreadyHas(progress, payload.field, payload.proposed)) {
         decisions.push({ id: row.id, approved: false });
       }
     }
