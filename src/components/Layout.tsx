@@ -469,7 +469,7 @@ export default function Layout({
             letterSpacing: '0.05em',
           }}>
             <Pencil size={12} />
-            MODE ADMIN — {adminActor === 'claire' ? 'Claire' : 'Gilles'} — Les écritures sont enregistrées sur le serveur{health?.blob ? ' (Blob actif)' : ' — ⚠ Blob non connecté, risque de perte'}.
+            MODE ADMIN — {adminActor === 'claire' ? 'Claire' : 'Gilles'} — Les écritures sont enregistrées sur le serveur{health == null ? '' : (health.blob ? ' (Blob actif)' : ' — ⚠ Blob non connecté, risque de perte')}.
           </div>
         )}
         {isAdmin && (globalSyncing || globalSyncMsg) && (
