@@ -1,5 +1,7 @@
 /**
- * Propositions de mise à jour émanant de la synchronisation — validation manuelle.
+ * Propositions + auto-application des avancées séjour / profil depuis les mails.
+ * - Signaux clairs (virement reçu, contrat signé en PJ, facture envoyée…) → appliqués tout de suite
+ * - Cas ambigus → file Historique (Valider / Refuser)
  */
 
 import { appendAudit, listAuditLog } from './audit-log.js';
@@ -32,6 +34,10 @@ const PROGRESS_LABELS = {
   phone: 'Téléphone',
   address: 'Adresse',
   groupComposition: 'Composition du groupe',
+  contractSent: 'Contrat envoyé',
+  depositInvoiceSent: 'Facture acompte envoyée',
+  balanceInvoiceSent: 'Facture solde envoyée',
+  mailSteps: 'Étape mail',
 };
 
 export function countPendingProposals(db) {
@@ -49,6 +55,132 @@ function ensureValidationColumn(db) {
   } catch { /* exists */ }
 }
 
+function isSentMailbox(mailbox) {
+  return /sent/i.test(mailbox || '');
+}
+
+/** Top of thread only — ignore quoted history. */
+function progressCorpus(subject, bodyText) {
+  return stripQuotedReply(`${subject || ''}\n${bodyText || ''}`, { minKeep: 0 });
+}
+
+function looksLikeRequestNotDone(text) {
+  return /merci\s+de\s+(?:signer|envoyer|fournir)|veuillez\s+(?:signer|envoyer)|pouvez[- ]vous|en\s+attente\s+(?:du|de)|please\s+sign|à\s+signer|à\s+nous\s+(?:renvoyer|retourner)|kindly\s+sign/i.test(text || '');
+}
+
+/**
+ * Map proposal field → stay_progress patch.
+ */
+export function patchFromProgressField(field, proposed) {
+  switch (field) {
+    case 'contractSigned':
+    case 'depositPaid':
+    case 'balancePaid':
+    case 'insuranceReceived':
+    case 'idReceived':
+    case 'depositGuaranteePaid':
+    case 'depositGuaranteeReturned':
+      return { [field]: Boolean(proposed) };
+    case 'depositInvoiceSent':
+      return {
+        depositInvoiceNumber: proposed === true || proposed == null ? 'envoyée' : String(proposed),
+      };
+    case 'balanceInvoiceSent':
+      return {
+        balanceInvoiceNumber: proposed === true || proposed == null ? 'envoyée' : String(proposed),
+      };
+    case 'contractSent':
+      return { mailSteps: { contract_info: 'sent' } };
+    case 'mailSteps':
+      return proposed && typeof proposed === 'object' ? { mailSteps: proposed } : null;
+    default:
+      return null;
+  }
+}
+
+function progressAlreadyHas(progress, field, proposed) {
+  if (!progress) return false;
+  if (field === 'mailSteps') {
+    const [[stepKey, stepStatus]] = Object.entries(proposed || {});
+    return progress.mailSteps?.[stepKey] === stepStatus;
+  }
+  if (field === 'contractSent') {
+    return progress.mailSteps?.contract_info === 'sent';
+  }
+  if (field === 'depositInvoiceSent') {
+    return Boolean(progress.depositInvoiceNumber);
+  }
+  if (field === 'balanceInvoiceSent') {
+    return Boolean(progress.balanceInvoiceNumber);
+  }
+  return progress[field] === true || progress[field] === proposed;
+}
+
+/** Align stay/week booking status with admin progress. */
+function bumpBookingFromProgress(db, contactId, checkIn, checkOut, field) {
+  if (!contactId || !checkIn) return;
+  let stayStatus = null;
+  let weekStatus = null;
+  if (field === 'depositPaid' || field === 'balancePaid') {
+    stayStatus = 'paid';
+    weekStatus = 'booked';
+  } else if (field === 'contractSigned') {
+    stayStatus = 'confirmed';
+    weekStatus = 'booked';
+  } else if (field === 'contractSent' || field === 'depositInvoiceSent') {
+    stayStatus = 'confirmed';
+    weekStatus = 'booked';
+  }
+  if (!stayStatus) return;
+
+  const stay = db.prepare(`
+    SELECT id, status, manual_lock FROM stays
+    WHERE contact_id = ? AND check_in = ? AND check_out = ?
+  `).get(contactId, checkIn, checkOut)
+    || db.prepare(`
+      SELECT id, status, manual_lock FROM stays
+      WHERE contact_id = ? AND check_in <= ? AND check_out >= ?
+      ORDER BY check_in DESC LIMIT 1
+    `).get(contactId, checkIn, checkOut);
+
+  const rank = { inquiry: 0, pending: 1, confirmed: 2, paid: 3 };
+  if (stay && stay.manual_lock !== 1) {
+    if ((rank[stayStatus] || 0) >= (rank[stay.status] || 0)) {
+      db.prepare('UPDATE stays SET status = ? WHERE id = ?').run(stayStatus, stay.id);
+    }
+  }
+
+  const week = db.prepare(`
+    SELECT id, status, manual_lock FROM requested_weeks
+    WHERE contact_id = ? AND check_in = ? AND check_out = ?
+  `).get(contactId, checkIn, checkOut);
+  if (week && week.manual_lock !== 1 && weekStatus) {
+    const wRank = { asked: 1, negotiating: 2, booked: 3, abandoned: 0 };
+    if ((wRank[weekStatus] || 0) >= (wRank[week.status] || 0)) {
+      db.prepare('UPDATE requested_weeks SET status = ? WHERE id = ?').run(weekStatus, week.id);
+    }
+  }
+
+  if (stayStatus === 'confirmed' || stayStatus === 'paid') {
+    db.prepare(`UPDATE contacts SET status = 'client', updated_at = datetime('now') WHERE id = ?`).run(contactId);
+  }
+}
+
+/**
+ * Apply a stay-progress / mail_sent field to the DB.
+ * @returns {boolean} true if something was written
+ */
+export function applyProgressField(db, contactId, checkIn, checkOut, field, proposed) {
+  if (!contactId || !checkIn || !checkOut) return false;
+  const patch = patchFromProgressField(field, proposed);
+  if (!patch) return false;
+  const current = getStayProgress(db, contactId, checkIn, checkOut);
+  if (progressAlreadyHas(current, field, proposed)) return false;
+  upsertStayProgress(db, contactId, checkIn, checkOut, patch);
+  bumpBookingFromProgress(db, contactId, checkIn, checkOut, field);
+  return true;
+}
+
 export function proposeSyncChange(db, {
   action = 'sync_proposal',
   entityType,
@@ -64,13 +196,16 @@ export function proposeSyncChange(db, {
   reviewReason = null,
   checkIn = null,
   checkOut = null,
+  validationStatus = 'pending',
 }) {
   ensureValidationColumn(db);
   const existing = db.prepare(`
-    SELECT id FROM audit_log
+    SELECT id, validation_status FROM audit_log
     WHERE action = 'sync_proposal' AND entity_id = ?
+    ORDER BY created_at DESC LIMIT 1
   `).get(entityId);
-  if (existing) return false;
+  // Allow a new proposal only if previous was rejected (or never existed).
+  if (existing && existing.validation_status !== 'rejected') return false;
 
   appendAudit(db, {
     action,
@@ -90,69 +225,80 @@ export function proposeSyncChange(db, {
       checkOut,
     },
     actor: 'automatic',
-    validationStatus: 'pending',
+    validationStatus,
   });
   return true;
-}
-
-function isSentMailbox(mailbox) {
-  return /sent/i.test(mailbox || '');
-}
-
-/** Top of thread only — ignore quoted history that can falsely fire "contrat signé". */
-function progressCorpus(subject, bodyText) {
-  // Aggressive quote strip (minKeep=0): short host replies must not inherit guest signals.
-  return stripQuotedReply(`${subject || ''}\n${bodyText || ''}`, { minKeep: 0 });
 }
 
 /** Détecte les mises à jour administratives dans un mail (entrant ou envoyé). */
 export function detectProgressHints(subject, bodyText, mailbox = 'INBOX') {
   const isSent = isSentMailbox(mailbox);
-  // Always ignore deep quoted history (guest text inside host replies, etc.).
   const text = progressCorpus(subject, bodyText);
   const hints = [];
+  if (!text || text.length < 8) return hints;
 
-  if (/contrat.{0,80}sign[eé]|sign[eé].{0,80}contrat|signed\s+contract|rental\s+agreement.{0,80}signed|read\s+and\s+approved|lu\s+et\s+approuv[eé]/i.test(text)) {
-    hints.push({ field: 'contractSigned', proposed: true, label: 'Contrat signé (mail)' });
+  const requesting = looksLikeRequestNotDone(text);
+
+  // Contrat signé — ignore "merci de signer / en attente"
+  if (
+    !requesting
+    && /contrat.{0,80}sign[eé]|sign[eé].{0,80}contrat|signed\s+contract|rental\s+agreement.{0,80}signed|read\s+and\s+approved|lu\s+et\s+approuv[eé]|contrat\s+de\s+location\s+sign/i.test(text)
+  ) {
+    hints.push({ field: 'contractSigned', proposed: true, label: 'Contrat signé (mail)', confidence: 'high' });
   }
-  if (/acompte\s+re[cç]u|deposit\s+(?:received|paid)|(?:bien\s+)?re[cç]u\s+le\s+virement|virement\s+re[cç]u|paiement\s+(?:de\s+l['']?)?acompte/i.test(text)) {
-    hints.push({ field: 'depositPaid', proposed: true, label: 'Paiement acompte reçu' });
+
+  if (/acompte\s+re[cç]u|deposit\s+(?:received|paid)|(?:bien\s+)?re[cç]u\s+le\s+virement|virement\s+re[cç]u|paiement\s+(?:de\s+l['']?)?acompte(?:\s+re[cç]u)?/i.test(text)) {
+    hints.push({ field: 'depositPaid', proposed: true, label: 'Paiement acompte reçu', confidence: 'high' });
   }
-  if (/attestation\s+(?:de\s+|d['’])?(?:garantie|assurance)|insurance\s+certificate|assurance\s+vill[eé]giature/i.test(text)) {
-    hints.push({ field: 'insuranceReceived', proposed: true, label: 'Assurance villégiature' });
+
+  if (
+    !requesting
+    && /(?:attestation\s+(?:de\s+|d['’])?(?:garantie|assurance)|insurance\s+certificate|assurance\s+vill[eé]giature)/i.test(text)
+    && /(?:ci-joint|pj|attach|re[cç]u|voici|envoy)/i.test(text)
+  ) {
+    hints.push({ field: 'insuranceReceived', proposed: true, label: 'Assurance villégiature', confidence: 'high' });
   }
-  if (/(?:pi[eè]ce|piece)\s+d['’]?identit[eé]|passeport|passport|identity\s+(?:card|document)|carte\s+d['’]?identit[eé]/i.test(text)) {
-    // Host asking for an ID ≠ ID received.
-    const asking = /merci\s+de\s+(?:nous\s+)?(?:envoyer|fournir)|pouvez[- ]vous|veuillez|besoin\s+de/i.test(text);
-    const received = /re[cç]u|reçue|received|ci-joint|pj|attach|voici/i.test(text);
-    if (!asking || received) {
-      hints.push({ field: 'idReceived', proposed: true, label: "Pièce d'identité reçue" });
+
+  // Pièce d'identité : reçu / envoyé en PJ — pas une simple demande
+  {
+    const idMention = /(?:pi[eè]ce|piece)\s+d['’ ]?identit[eé]|passeport|passport|identity\s+(?:card|document)|carte\s+d['’ ]?identit[eé]/i.test(text);
+    const idReceivedCue = /(?:ci-joint|pj|attach|voici|re[cç]u|reçue|received).{0,80}(?:identit|passeport|passport)|(?:identit|passeport|passport).{0,60}(?:ci-joint|pj|attach|re[cç]u|reçue|voici)/i.test(text);
+    if (idMention && idReceivedCue && !requesting) {
+      hints.push({ field: 'idReceived', proposed: true, label: "Pièce d'identité reçue", confidence: 'high' });
     }
   }
+
   if (/solde\s+(?:re[cç]u|pay[eé]|r[eé]gl[eé])|balance\s+(?:received|paid)/i.test(text)) {
-    hints.push({ field: 'balancePaid', proposed: true, label: 'Solde payé' });
+    hints.push({ field: 'balancePaid', proposed: true, label: 'Solde payé', confidence: 'high' });
   }
   if (/caution\s+(?:re[cç]ue|vers[eé]e|pay[eé]e)|swikly|security\s+deposit\s+(?:received|paid)/i.test(text)) {
-    hints.push({ field: 'depositGuaranteePaid', proposed: true, label: 'Caution reçue' });
+    hints.push({ field: 'depositGuaranteePaid', proposed: true, label: 'Caution reçue', confidence: 'high' });
   }
   if (/caution\s+(?:rendue|restitu[eé]e|rembours[eé]e)|security\s+deposit\s+(?:returned|refunded)/i.test(text)) {
-    hints.push({ field: 'depositGuaranteeReturned', proposed: true, label: 'Caution rendue' });
+    hints.push({ field: 'depositGuaranteeReturned', proposed: true, label: 'Caution rendue', confidence: 'high' });
   }
+
   if (isSent) {
-    if (/facture\s+d['']?acompte|deposit\s+invoice/i.test(text)) {
-      hints.push({ field: 'depositInvoiceSent', proposed: true, label: 'Facture acompte envoyée' });
+    if (/facture\s+d['']?acompte|deposit\s+invoice|facture.{0,40}acompte/i.test(text)) {
+      hints.push({ field: 'depositInvoiceSent', proposed: true, label: 'Facture acompte envoyée', confidence: 'high' });
     }
-    if (/ci-joint.{0,40}contrat|contrat.{0,60}(?:ci-joint|pj|attach|pi[eè]ce)|vous trouverez.{0,80}contrat|rental\s+agreement|finaliser\s+le\s+contrat/i.test(text)) {
-      hints.push({ field: 'contractSent', proposed: true, label: 'Contrat envoyé au client' });
+    if (/ci-joint.{0,40}contrat|contrat.{0,60}(?:ci-joint|pj|attach|pi[eè]ce)|vous trouverez.{0,80}contrat|finaliser\s+le\s+contrat/i.test(text)) {
+      hints.push({ field: 'contractSent', proposed: true, label: 'Contrat envoyé au client', confidence: 'high' });
     }
     if (/facture\s+(?:de\s+)?solde|balance\s+invoice/i.test(text)) {
-      hints.push({ field: 'balanceInvoiceSent', proposed: true, label: 'Facture solde envoyée' });
+      hints.push({ field: 'balanceInvoiceSent', proposed: true, label: 'Facture solde envoyée', confidence: 'high' });
     }
     const mailStep = detectSentMailStep(text);
     if (mailStep) {
-      hints.push({ field: 'mailSteps', proposed: { [mailStep]: 'sent' }, label: `Étape mail envoyée — ${mailStep}` });
+      hints.push({
+        field: 'mailSteps',
+        proposed: { [mailStep]: 'sent' },
+        label: `Étape mail envoyée — ${mailStep}`,
+        confidence: 'medium',
+      });
     }
   }
+
   return hints;
 }
 
@@ -166,8 +312,17 @@ function detectSentMailStep(text) {
   return null;
 }
 
+function shouldAutoApplyHint(hint, email, text) {
+  if (hint.confidence === 'high') return true;
+  if (hint.field === 'mailSteps' && isSentMailbox(email.mailbox)) return true;
+  if (hint.field === 'groupComposition' && hint.proposed?.typicalAdults) return true;
+  // Extra safety: deposit wording always auto
+  if (hint.field === 'depositPaid' && /virement|acompte|deposit/i.test(text)) return true;
+  return false;
+}
+
 /**
- * Scan emails récents et crée des propositions sync (sans appliquer stay_progress).
+ * Scan emails — auto-applique les signaux clairs, sinon file d'attente.
  */
 export function scanEmailsForProposals(db, opts = {}) {
   const sinceDays = opts.sinceDays ?? 120;
@@ -187,10 +342,12 @@ export function scanEmailsForProposals(db, opts = {}) {
 
   let proposals = 0;
   let reviewProposals = 0;
+  let autoApplied = 0;
 
   for (const email of emails) {
     const cleanBody = cleanStoredBodyText(email.body_text || '');
     const cleanEmail = { ...email, body_text: cleanBody };
+    const topText = progressCorpus(email.subject, cleanBody);
     const hints = [
       ...detectProgressHints(email.subject, cleanBody, email.mailbox),
       ...detectContactHints(cleanEmail),
@@ -200,7 +357,31 @@ export function scanEmailsForProposals(db, opts = {}) {
 
     let createdForEmail = 0;
     const contactHints = hints.filter(h => h.field === 'phone' || h.field === 'address' || h.field === 'groupComposition');
+
     for (const hint of contactHints) {
+      if (hint.field === 'groupComposition' && shouldAutoApplyHint(hint, email, topText)) {
+        if (applyGroupComposition(db, email.contact_id, hint.proposed, dates)) {
+          autoApplied++;
+          proposeSyncChange(db, {
+            entityType: 'contact_profile',
+            entityId: `${email.contact_id}:groupComposition:${dates?.checkIn || 'na'}`,
+            contactId: email.contact_id,
+            label: `${hint.label} — ${email.contact_name}`,
+            field: hint.field,
+            proposed: hint.proposed,
+            emailId: email.id,
+            emailSubject: email.subject,
+            emailExcerpt: cleanBody.replace(/\s+/g, ' ').slice(0, 220),
+            reviewReason: 'Appliqué automatiquement depuis le mail',
+            checkIn: dates?.checkIn || null,
+            checkOut: dates?.checkOut || null,
+            validationStatus: 'approved',
+          });
+          createdForEmail++;
+          continue;
+        }
+      }
+
       if (proposeSyncChange(db, {
         entityType: 'contact_profile',
         entityId: `${email.contact_id}:${hint.field}:${email.id}`,
@@ -232,42 +413,51 @@ export function scanEmailsForProposals(db, opts = {}) {
     }
 
     for (const hint of hints.filter(h => !contactHints.includes(h))) {
-      if (hint.field === 'depositInvoiceSent' || hint.field === 'contractSent' || hint.field === 'balanceInvoiceSent') {
-        if (proposeSyncChange(db, {
-          entityType: 'mail_sent',
-          entityId: `${email.id}:${hint.field}`,
-          contactId: email.contact_id,
-          label: `${hint.label} — ${email.contact_name}`,
-          field: hint.field,
-          proposed: true,
-          emailId: email.id,
-          emailSubject: email.subject,
-          checkIn: dates.checkIn,
-          checkOut: dates.checkOut,
-        })) {
-          proposals++;
+      const progress = getStayProgress(db, email.contact_id, dates.checkIn, dates.checkOut);
+      if (progressAlreadyHas(progress, hint.field, hint.proposed)) continue;
+
+      // One proposal / auto per stay+field (not per email) to avoid Milon×4 noise.
+      const entityId = `${email.contact_id}:${dates.checkIn}:${hint.field}`;
+      const entityType = ['depositInvoiceSent', 'contractSent', 'balanceInvoiceSent', 'mailSteps'].includes(hint.field)
+        ? 'mail_sent'
+        : 'stay_progress';
+
+      if (shouldAutoApplyHint(hint, email, topText)) {
+        if (applyProgressField(db, email.contact_id, dates.checkIn, dates.checkOut, hint.field, hint.proposed)) {
+          autoApplied++;
+          proposeSyncChange(db, {
+            entityType,
+            entityId,
+            contactId: email.contact_id,
+            label: `${hint.label} — ${email.contact_name}`,
+            field: hint.field,
+            proposed: hint.proposed,
+            before: progress?.[hint.field] ?? false,
+            emailId: email.id,
+            emailSubject: email.subject,
+            emailExcerpt: topText.replace(/\s+/g, ' ').slice(0, 220),
+            reviewReason: 'Appliqué automatiquement (signal clair dans le mail)',
+            checkIn: dates.checkIn,
+            checkOut: dates.checkOut,
+            validationStatus: 'approved',
+          });
           createdForEmail++;
         }
         continue;
       }
 
-      const progress = getStayProgress(db, email.contact_id, dates.checkIn, dates.checkOut);
-      const currentVal = progress?.[hint.field];
-      if (hint.field === 'mailSteps') {
-        const [[stepKey, stepStatus]] = Object.entries(hint.proposed);
-        if (progress?.mailSteps?.[stepKey] === stepStatus) continue;
-      } else if (currentVal === hint.proposed) continue;
-
       if (proposeSyncChange(db, {
-        entityType: 'stay_progress',
-        entityId: `${email.contact_id}:${dates.checkIn}:${hint.field}`,
+        entityType,
+        entityId,
         contactId: email.contact_id,
         label: `${hint.label} — ${email.contact_name}`,
         field: hint.field,
         proposed: hint.proposed,
-        before: currentVal ?? false,
+        before: progress?.[hint.field] ?? false,
         emailId: email.id,
         emailSubject: email.subject,
+        emailExcerpt: topText.replace(/\s+/g, ' ').slice(0, 220),
+        reviewReason: 'Mise à jour à confirmer',
         checkIn: dates.checkIn,
         checkOut: dates.checkOut,
       })) {
@@ -286,7 +476,13 @@ export function scanEmailsForProposals(db, opts = {}) {
     }
   }
 
-  return { emailsScanned: emails.length, proposalsCreated: proposals + reviewProposals, updatesCreated: proposals, reviewsCreated: reviewProposals };
+  return {
+    emailsScanned: emails.length,
+    proposalsCreated: proposals + reviewProposals,
+    updatesCreated: proposals,
+    reviewsCreated: reviewProposals,
+    autoApplied,
+  };
 }
 
 function proposeMailReviewIfUseful(db, email, { reviewLimit, currentCount, reason, dates = null }) {
@@ -326,10 +522,9 @@ function suggestedReviewAction(text) {
 }
 
 function detectContactHints(email) {
-  // Never mine guest coords from host-sent mails (signatures = Claire / Gilles phones).
   if (isSentMailbox(email.mailbox)) return [];
 
-  const stripped = stripQuotedReply(`${email.subject || ''}\n${email.body_text || ''}`);
+  const stripped = stripQuotedReply(`${email.subject || ''}\n${email.body_text || ''}`, { minKeep: 0 });
   const text = stripped
     .split('\n')
     .filter((line) => !isHostContentLine(line))
@@ -342,10 +537,9 @@ function detectContactHints(email) {
     && !isHostPhone(cleanPhone)
     && !String(email.contact_phone || '').replace(/\s+/g, '').includes(cleanPhone.replace(/\s+/g, ''))
   ) {
-    hints.push({ field: 'phone', proposed: cleanPhone, label: 'Téléphone à ajouter' });
+    hints.push({ field: 'phone', proposed: cleanPhone, label: 'Téléphone à ajouter', confidence: 'medium' });
   }
 
-  // Require "adresse :" style — optional colon without separator matched "adresse postale et…"
   const rawAddress = text.match(/(?:home\s+address|adresse|address)\s*[:\-]\s*([^\n]{10,180})/i)?.[1]?.trim();
   const address = rawAddress
     ?.split(/\b(?:phone|t[eé]l(?:[ée]phone)?|mobile|portable|best\s+wishes|mail|e-?mail)\b/i)[0]
@@ -356,33 +550,90 @@ function detectContactHints(email) {
     && isPlausibleGuestAddress(address)
     && !String(email.contact_address || '').toLowerCase().includes(address.toLowerCase().slice(0, 16))
   ) {
-    hints.push({ field: 'address', proposed: address, label: 'Adresse à ajouter' });
+    hints.push({ field: 'address', proposed: address, label: 'Adresse à ajouter', confidence: 'medium' });
   }
 
   const adults = text.match(/(\d+)\s*(?:adultes?|adults?)/i)?.[1];
   const children = text.match(/(\d+)\s*(?:enfants?|children|kids)/i)?.[1];
-  if (adults || children) {
+  const persons = text.match(/(\d+)\s*(?:personnes?|people|persons|pax|guests?)/i)?.[1];
+  if (adults || children || persons) {
     let profile = {};
     try { profile = JSON.parse(email.contact_profile_json || '{}'); } catch { /* ignore */ }
     const proposed = {
-      typicalAdults: adults ? parseInt(adults, 10) : Number(profile.typicalAdults || 0),
+      typicalAdults: adults
+        ? parseInt(adults, 10)
+        : (persons ? parseInt(persons, 10) : Number(profile.typicalAdults || 0)),
       typicalChildren: children ? parseInt(children, 10) : Number(profile.typicalChildren || 0),
     };
-    if ((proposed.typicalAdults && proposed.typicalAdults !== Number(profile.typicalAdults || 0))
-      || (proposed.typicalChildren && proposed.typicalChildren !== Number(profile.typicalChildren || 0))) {
-      hints.push({ field: 'groupComposition', proposed, label: 'Composition du groupe à ajouter' });
+    if (
+      (proposed.typicalAdults && proposed.typicalAdults !== Number(profile.typicalAdults || 0))
+      || (proposed.typicalChildren && proposed.typicalChildren !== Number(profile.typicalChildren || 0))
+    ) {
+      hints.push({
+        field: 'groupComposition',
+        proposed,
+        label: 'Composition du groupe à ajouter',
+        confidence: 'high',
+      });
     }
   }
 
   return hints;
 }
 
+function applyGroupComposition(db, contactId, proposed, dates = null) {
+  if (!contactId || !proposed) return false;
+  const row = db.prepare('SELECT profile_json FROM contacts WHERE id = ?').get(contactId);
+  let profile = {};
+  try { profile = JSON.parse(row?.profile_json || '{}'); } catch { /* ignore */ }
+  const next = {
+    ...profile,
+    typicalAdults: proposed.typicalAdults || profile.typicalAdults || 0,
+    typicalChildren: proposed.typicalChildren || profile.typicalChildren || 0,
+    extractedAt: new Date().toISOString(),
+  };
+  db.prepare(`
+    UPDATE contacts SET profile_json = ?, updated_at = datetime('now') WHERE id = ?
+  `).run(JSON.stringify(next), contactId);
+
+  if (dates?.checkIn && dates?.checkOut) {
+    const adults = Number(proposed.typicalAdults || 0);
+    const children = Number(proposed.typicalChildren || 0);
+    if (adults > 0 || children > 0) {
+      db.prepare(`
+        UPDATE stays SET
+          adults = CASE WHEN ? > 0 THEN ? ELSE adults END,
+          children = CASE WHEN ? > 0 THEN ? ELSE children END
+        WHERE contact_id = ? AND check_in = ? AND check_out = ?
+      `).run(adults, adults, children, children, contactId, dates.checkIn, dates.checkOut);
+      db.prepare(`
+        UPDATE requested_weeks SET
+          adults = CASE WHEN ? > 0 THEN ? ELSE adults END,
+          children = CASE WHEN ? > 0 THEN ? ELSE children END
+        WHERE contact_id = ? AND check_in = ? AND check_out = ?
+      `).run(adults, adults, children, children, contactId, dates.checkIn, dates.checkOut);
+    }
+  }
+  return true;
+}
+
 function findDatesFromContact(db, contactId) {
+  // Prefer the most recent incomplete stay progress, then latest week/stay.
+  const incomplete = db.prepare(`
+    SELECT check_in, check_out FROM stay_progress
+    WHERE contact_id = ?
+      AND (contract_signed = 0 OR deposit_paid = 0 OR insurance_received = 0 OR id_received = 0)
+    ORDER BY check_in DESC LIMIT 1
+  `).get(contactId);
+  if (incomplete) return { checkIn: incomplete.check_in, checkOut: incomplete.check_out };
+
   const week = db.prepare(`
     SELECT check_in, check_out FROM requested_weeks
-    WHERE contact_id = ? ORDER BY check_in DESC LIMIT 1
+    WHERE contact_id = ? AND status != 'abandoned'
+    ORDER BY check_in DESC LIMIT 1
   `).get(contactId);
   if (week) return { checkIn: week.check_in, checkOut: week.check_out };
+
   const stay = db.prepare(`
     SELECT check_in, check_out FROM stays
     WHERE contact_id = ? ORDER BY check_in DESC LIMIT 1
@@ -408,26 +659,18 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
       const checkIn = payload.checkIn;
       const checkOut = payload.checkOut;
       if (row.entity_type === 'mail_review') {
-        // Manual review proposals only mark the email as handled in audit history.
+        // Manual review only.
       } else if (row.entity_type === 'contact_profile') {
-        applyContactProfileProposal(db, row.contact_id, payload);
-      } else if (row.entity_type === 'stay_progress' || payload.field in PROGRESS_LABELS) {
+        applyContactProfileProposal(db, row.contact_id, payload, { checkIn, checkOut });
+      } else if (
+        row.entity_type === 'stay_progress'
+        || row.entity_type === 'mail_sent'
+        || payload.field in PROGRESS_LABELS
+        || ['contractSent', 'depositInvoiceSent', 'balanceInvoiceSent', 'mailSteps'].includes(payload.field)
+      ) {
         if (checkIn && checkOut) {
-          const patch = payload.field === 'mailSteps'
-            ? { mailSteps: payload.proposed }
-            : { [payload.field]: payload.proposed };
-          if (payload.field === 'depositInvoiceSent') {
-            patch.depositInvoiceNumber = patch.depositInvoiceNumber || 'auto';
-          }
-          if (payload.field === 'balanceInvoiceSent') {
-            patch.balanceInvoiceNumber = patch.balanceInvoiceNumber || 'envoyée';
-          }
-          upsertStayProgress(db, row.contact_id, checkIn, checkOut, patch);
+          applyProgressField(db, row.contact_id, checkIn, checkOut, payload.field, payload.proposed);
         }
-      } else if (row.entity_type === 'mail_sent' && payload.field === 'depositInvoiceSent' && checkIn && checkOut) {
-        upsertStayProgress(db, row.contact_id, checkIn, checkOut, { depositInvoiceNumber: 'envoyée' });
-      } else if (row.entity_type === 'mail_sent' && payload.field === 'balanceInvoiceSent' && checkIn && checkOut) {
-        upsertStayProgress(db, row.contact_id, checkIn, checkOut, { balanceInvoiceNumber: 'envoyée' });
       }
       db.prepare("UPDATE audit_log SET validation_status = 'approved' WHERE id = ?").run(id);
       results.push({ id, ok: true, status: 'approved', previousStatus: row.validation_status });
@@ -453,7 +696,7 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
   return results;
 }
 
-function applyContactProfileProposal(db, contactId, payload) {
+function applyContactProfileProposal(db, contactId, payload, dates = null) {
   if (!contactId) return;
   if (payload.field === 'phone' && payload.proposed) {
     const phone = String(payload.proposed).trim();
@@ -474,19 +717,7 @@ function applyContactProfileProposal(db, contactId, payload) {
     return;
   }
   if (payload.field === 'groupComposition' && payload.proposed && typeof payload.proposed === 'object') {
-    const row = db.prepare('SELECT profile_json FROM contacts WHERE id = ?').get(contactId);
-    let profile = {};
-    try { profile = JSON.parse(row?.profile_json || '{}'); } catch { /* ignore */ }
-    const next = {
-      ...profile,
-      typicalAdults: payload.proposed.typicalAdults || profile.typicalAdults || 0,
-      typicalChildren: payload.proposed.typicalChildren || profile.typicalChildren || 0,
-      extractedAt: new Date().toISOString(),
-    };
-    db.prepare(`
-      UPDATE contacts SET profile_json = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(JSON.stringify(next), contactId);
+    applyGroupComposition(db, contactId, payload.proposed, dates);
   }
 }
 
@@ -497,7 +728,6 @@ export function listPendingProposals(db, limit = 100) {
 
 /**
  * Reject all pending sync proposals for a given payload field (e.g. mailReview).
- * Used to clear soft "mail to qualify" backlog without touching concrete updates.
  */
 export function rejectPendingByField(db, field, actor = 'gilles') {
   ensureValidationColumn(db);
@@ -527,10 +757,7 @@ export function rejectPendingByField(db, field, actor = 'gilles') {
   };
 }
 
-/**
- * Drop pending contact proposals that are host noise or otherwise unusable
- * (Claire/Gilles phones, "adresse postale et vos numéros…", etc.).
- */
+/** Drop pending host/junk phone & address proposals. */
 export function rejectInvalidPhoneProposals(db, actor = 'gilles') {
   ensureValidationColumn(db);
   const rows = db.prepare(`

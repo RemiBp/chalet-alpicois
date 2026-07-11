@@ -6,6 +6,8 @@
 import { extractInquiryBest, computeSeason } from './extract-inquiry.js';
 import { isNoiseEmail, extractPriceFromEmail } from './price-extract.js';
 import { findOverlappingStay, findOverlappingWeek } from './dedupe-bookings.js';
+import { stripQuotedReply } from './contact-coords.js';
+import { applyProgressField } from './sync-proposals.js';
 
 /** @typedef {'deposit_received'|'contract_signed'|'reservation_confirmed'|'contract_finalizing'|'reservation_intent'|'negotiating'|'inquiry'|null} SignalType */
 
@@ -21,6 +23,8 @@ const RULES = [
       /deposit\s+(?:received|paid)/i,
       /down\s+payment\s+received/i,
       /virement\s+(?:re[cç]u|effectu[eé])/i,
+      /(?:bien\s+)?re[cç]u\s+le\s+virement/i,
+      /paiement\s+(?:de\s+l['']?)?acompte/i,
     ],
   },
   {
@@ -113,11 +117,21 @@ const RULES = [
  * @param {string} [mailbox]
  */
 export function detectSignalFromEmail(subject, bodyText, mailbox = 'INBOX') {
-  const text = `${subject || ''}\n${bodyText || ''}`.trim();
+  // Ignore quoted history — host replies quoting "contrat signé" must not re-fire.
+  const text = stripQuotedReply(`${subject || ''}\n${bodyText || ''}`, { minKeep: 0 }).trim();
   if (!text || isNoiseEmail(subject, bodyText)) return null;
+
+  // Host asking to sign ≠ already signed
+  if (/merci\s+de\s+signer|veuillez\s+signer|please\s+sign|en\s+attente\s+du\s+contrat/i.test(text)
+    && !/contrat\s+sign[eé]\s+en\s+pj|signed\s+contract\s+attach|voici.{0,40}contrat\s+sign/i.test(text)) {
+    // Fall through without treating as contract_signed — other rules may still match
+  }
 
   let best = null;
   for (const rule of RULES) {
+    if (rule.type === 'contract_signed' && /merci\s+de\s+signer|veuillez\s+signer|please\s+sign|à\s+signer/i.test(text)) {
+      continue;
+    }
     if (rule.patterns.some(p => p.test(text))) {
       if (!best || rule.strength > best.strength) {
         best = {
@@ -134,7 +148,7 @@ export function detectSignalFromEmail(subject, bodyText, mailbox = 'INBOX') {
   if (!best) return null;
 
   // Contrat signé + acompte dans le même mail
-  if (/contrat\s+sign/i.test(text) && /acompte\s+re[cç]u/i.test(text)) {
+  if (/contrat\s+sign/i.test(text) && /acompte\s+re[cç]u|virement\s+re[cç]u|(?:bien\s+)?re[cç]u\s+le\s+virement/i.test(text)) {
     best = { ...best, type: 'deposit_received', label: 'Contrat signé + acompte reçu', strength: 100, stayStatus: 'paid', weekStatus: 'booked' };
   }
 
@@ -241,6 +255,18 @@ export function applySignalToContact(db, email, signal, dates) {
 
   if (signal.stayStatus === 'confirmed' || signal.stayStatus === 'paid') {
     db.prepare(`UPDATE contacts SET status = 'client', updated_at = datetime('now') WHERE id = ?`).run(contactId);
+  }
+
+  // Mirror clear booking signals onto stay_progress admin checklist.
+  if (signal.type === 'contract_signed' || signal.type === 'deposit_received') {
+    try {
+      if (signal.type === 'contract_signed' || signal.type === 'deposit_received') {
+        applyProgressField(db, contactId, checkIn, checkOut, 'contractSigned', true);
+      }
+      if (signal.type === 'deposit_received') {
+        applyProgressField(db, contactId, checkIn, checkOut, 'depositPaid', true);
+      }
+    } catch { /* stay_progress optional */ }
   }
 
   return { updated: weekUpdated || stayUpdated, weekUpdated, stayUpdated };
