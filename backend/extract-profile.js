@@ -22,6 +22,7 @@ import {
   extractCoordinatesFromText,
   extractPhone,
   isPlausiblePhone,
+  isHostPhone,
   mergeExtractedFields,
 } from './contact-coords.js';
 
@@ -244,6 +245,18 @@ export function enrichProfilesFromEmails(db, { limit = 500 } = {}) {
   const clearPhone = db.prepare(`UPDATE contacts SET phone = '', updated_at = datetime('now') WHERE id = ?`);
   for (const row of badPhones) {
     if (!isPlausiblePhone(row.phone)) {
+      clearPhone.run(row.id);
+      clearedBadPhones++;
+    }
+  }
+
+  // Never keep Claire / Gilles numbers on guest contacts.
+  const allPhones = db.prepare(`
+    SELECT id, phone FROM contacts
+    WHERE phone IS NOT NULL AND phone != '' AND COALESCE(is_personal, 0) = 0
+  `).all();
+  for (const row of allPhones) {
+    if (isHostPhone(row.phone)) {
       clearPhone.run(row.id);
       clearedBadPhones++;
     }

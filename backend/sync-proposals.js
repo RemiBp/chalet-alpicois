@@ -7,7 +7,14 @@ import { upsertStayProgress, getStayProgress } from './stay-progress.js';
 import { extractInquiryBest } from './extract-inquiry.js';
 import { isNoiseEmail } from './price-extract.js';
 import { cleanStoredBodyText } from './email-body.js';
-import { extractPhone, isPlausiblePhone } from './contact-coords.js';
+import {
+  extractPhone,
+  isPlausiblePhone,
+  isHostPhone,
+  isPlausibleGuestAddress,
+  stripQuotedReply,
+  isHostContentLine,
+} from './contact-coords.js';
 
 const PROGRESS_LABELS = {
   contractSigned: 'Contrat signé',
@@ -88,23 +95,39 @@ export function proposeSyncChange(db, {
   return true;
 }
 
+function isSentMailbox(mailbox) {
+  return /sent/i.test(mailbox || '');
+}
+
+/** Top of thread only — ignore quoted history that can falsely fire "contrat signé". */
+function progressCorpus(subject, bodyText) {
+  // Aggressive quote strip (minKeep=0): short host replies must not inherit guest signals.
+  return stripQuotedReply(`${subject || ''}\n${bodyText || ''}`, { minKeep: 0 });
+}
+
 /** Détecte les mises à jour administratives dans un mail (entrant ou envoyé). */
 export function detectProgressHints(subject, bodyText, mailbox = 'INBOX') {
-  const text = `${subject || ''}\n${bodyText || ''}`;
+  const isSent = isSentMailbox(mailbox);
+  // Always ignore deep quoted history (guest text inside host replies, etc.).
+  const text = progressCorpus(subject, bodyText);
   const hints = [];
-  const isSent = /sent/i.test(mailbox);
 
   if (/contrat.{0,80}sign[eé]|sign[eé].{0,80}contrat|signed\s+contract|rental\s+agreement.{0,80}signed|read\s+and\s+approved|lu\s+et\s+approuv[eé]/i.test(text)) {
     hints.push({ field: 'contractSigned', proposed: true, label: 'Contrat signé (mail)' });
   }
-  if (/acompte\s+re[cç]u|deposit\s+(?:received|paid)|virement\s+re[cç]u|paiement\s+(?:de\s+l['']?)?acompte/i.test(text)) {
+  if (/acompte\s+re[cç]u|deposit\s+(?:received|paid)|(?:bien\s+)?re[cç]u\s+le\s+virement|virement\s+re[cç]u|paiement\s+(?:de\s+l['']?)?acompte/i.test(text)) {
     hints.push({ field: 'depositPaid', proposed: true, label: 'Paiement acompte reçu' });
   }
   if (/attestation\s+(?:de\s+|d['’])?(?:garantie|assurance)|insurance\s+certificate|assurance\s+vill[eé]giature/i.test(text)) {
     hints.push({ field: 'insuranceReceived', proposed: true, label: 'Assurance villégiature' });
   }
   if (/(?:pi[eè]ce|piece)\s+d['’]?identit[eé]|passeport|passport|identity\s+(?:card|document)|carte\s+d['’]?identit[eé]/i.test(text)) {
-    hints.push({ field: 'idReceived', proposed: true, label: "Pièce d'identité reçue" });
+    // Host asking for an ID ≠ ID received.
+    const asking = /merci\s+de\s+(?:nous\s+)?(?:envoyer|fournir)|pouvez[- ]vous|veuillez|besoin\s+de/i.test(text);
+    const received = /re[cç]u|reçue|received|ci-joint|pj|attach|voici/i.test(text);
+    if (!asking || received) {
+      hints.push({ field: 'idReceived', proposed: true, label: "Pièce d'identité reçue" });
+    }
   }
   if (/solde\s+(?:re[cç]u|pay[eé]|r[eé]gl[eé])|balance\s+(?:received|paid)/i.test(text)) {
     hints.push({ field: 'balancePaid', proposed: true, label: 'Solde payé' });
@@ -119,7 +142,7 @@ export function detectProgressHints(subject, bodyText, mailbox = 'INBOX') {
     if (/facture\s+d['']?acompte|deposit\s+invoice/i.test(text)) {
       hints.push({ field: 'depositInvoiceSent', proposed: true, label: 'Facture acompte envoyée' });
     }
-    if (/contrat\s+de\s+location|rental\s+agreement|finaliser\s+le\s+contrat/i.test(text)) {
+    if (/ci-joint.{0,40}contrat|contrat.{0,60}(?:ci-joint|pj|attach|pi[eè]ce)|vous trouverez.{0,80}contrat|rental\s+agreement|finaliser\s+le\s+contrat/i.test(text)) {
       hints.push({ field: 'contractSent', proposed: true, label: 'Contrat envoyé au client' });
     }
     if (/facture\s+(?:de\s+)?solde|balance\s+invoice/i.test(text)) {
@@ -303,26 +326,34 @@ function suggestedReviewAction(text) {
 }
 
 function detectContactHints(email) {
-  const text = `${email.subject || ''}\n${email.body_text || ''}`;
+  // Never mine guest coords from host-sent mails (signatures = Claire / Gilles phones).
+  if (isSentMailbox(email.mailbox)) return [];
+
+  const stripped = stripQuotedReply(`${email.subject || ''}\n${email.body_text || ''}`);
+  const text = stripped
+    .split('\n')
+    .filter((line) => !isHostContentLine(line))
+    .join('\n');
   const hints = [];
   const cleanPhone = extractPhone(text);
   if (
     cleanPhone
     && isPlausiblePhone(cleanPhone)
+    && !isHostPhone(cleanPhone)
     && !String(email.contact_phone || '').replace(/\s+/g, '').includes(cleanPhone.replace(/\s+/g, ''))
   ) {
     hints.push({ field: 'phone', proposed: cleanPhone, label: 'Téléphone à ajouter' });
   }
 
-  const rawAddress = text.match(/(?:home\s+address|adresse|address)\s*[:\-]?\s*([^\n]{10,180})/i)?.[1]?.trim();
+  // Require "adresse :" style — optional colon without separator matched "adresse postale et…"
+  const rawAddress = text.match(/(?:home\s+address|adresse|address)\s*[:\-]\s*([^\n]{10,180})/i)?.[1]?.trim();
   const address = rawAddress
-    ?.split(/\b(?:phone|t[eé]l(?:[ée]phone)?|mobile|portable|best\s+wishes|mail)\b/i)[0]
+    ?.split(/\b(?:phone|t[eé]l(?:[ée]phone)?|mobile|portable|best\s+wishes|mail|e-?mail)\b/i)[0]
     ?.replace(/\s+/g, ' ')
     ?.trim();
   if (
     address
-    && address.length >= 8
-    && !/[?]{2,}/.test(address)
+    && isPlausibleGuestAddress(address)
     && !String(email.contact_address || '').toLowerCase().includes(address.toLowerCase().slice(0, 16))
   ) {
     hints.push({ field: 'address', proposed: address, label: 'Adresse à ajouter' });
@@ -426,7 +457,7 @@ function applyContactProfileProposal(db, contactId, payload) {
   if (!contactId) return;
   if (payload.field === 'phone' && payload.proposed) {
     const phone = String(payload.proposed).trim();
-    if (!isPlausiblePhone(phone)) return;
+    if (!isPlausiblePhone(phone) || isHostPhone(phone)) return;
     db.prepare(`
       UPDATE contacts SET phone = COALESCE(NULLIF(phone, ''), ?), updated_at = datetime('now')
       WHERE id = ?
@@ -435,7 +466,7 @@ function applyContactProfileProposal(db, contactId, payload) {
   }
   if (payload.field === 'address' && payload.proposed) {
     const address = String(payload.proposed).trim();
-    if (address.length < 8) return;
+    if (!isPlausibleGuestAddress(address)) return;
     db.prepare(`
       UPDATE contacts SET address = COALESCE(NULLIF(address, ''), ?), updated_at = datetime('now')
       WHERE id = ?
@@ -496,7 +527,10 @@ export function rejectPendingByField(db, field, actor = 'gilles') {
   };
 }
 
-/** Drop pending phone proposals that would never pass isPlausiblePhone. */
+/**
+ * Drop pending contact proposals that are host noise or otherwise unusable
+ * (Claire/Gilles phones, "adresse postale et vos numéros…", etc.).
+ */
 export function rejectInvalidPhoneProposals(db, actor = 'gilles') {
   ensureValidationColumn(db);
   const rows = db.prepare(`
@@ -509,8 +543,14 @@ export function rejectInvalidPhoneProposals(db, actor = 'gilles') {
   for (const row of rows) {
     let payload = {};
     try { payload = JSON.parse(row.payload_json || '{}'); } catch { /* ignore */ }
-    if (payload.field === 'phone' && !isPlausiblePhone(payload.proposed)) {
-      decisions.push({ id: row.id, approved: false });
+    if (payload.field === 'phone') {
+      if (!isPlausiblePhone(payload.proposed) || isHostPhone(payload.proposed)) {
+        decisions.push({ id: row.id, approved: false });
+      }
+    } else if (payload.field === 'address') {
+      if (!isPlausibleGuestAddress(payload.proposed)) {
+        decisions.push({ id: row.id, approved: false });
+      }
     }
   }
   if (!decisions.length) {

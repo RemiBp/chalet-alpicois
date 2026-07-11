@@ -62,9 +62,46 @@ const NATIONALITY_FROM_COUNTRY = {
   Italie: 'Italienne',
 };
 
+/** Digits only, FR mobiles normalized to 0XXXXXXXXX when possible. */
+export function normalizePhoneDigits(value) {
+  let d = String(value || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('33') && d.length >= 11) d = `0${d.slice(2)}`;
+  return d;
+}
+
+/** Claire / Gilles / chalet — never attribute to a guest. */
+const HOST_PHONE_KEYS = new Set([
+  '0632656564', // Claire
+  '0674829176', // Gilles
+  '33265656564',
+  '33674829176',
+]);
+
+export function isHostPhone(value) {
+  const d = normalizePhoneDigits(value);
+  if (!d) return false;
+  if (HOST_PHONE_KEYS.has(d)) return true;
+  const last10 = d.slice(-10);
+  if (HOST_PHONE_KEYS.has(last10) || HOST_PHONE_KEYS.has(`0${d.slice(-9)}`)) return true;
+  // Explicit landlord strings (with or without labels)
+  if (/0632656564|0674829176|632656564|674829176/.test(d)) return true;
+  return false;
+}
+
+export function cleanPhoneCapture(raw) {
+  return String(raw || '')
+    .replace(/[.\u00a0\s,;:/]+$/g, '')
+    .replace(/^[\s.:\-]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function isHostContentLine(line) {
   const t = (line || '').trim();
   if (!t || t.length < 3) return true;
+  if (isHostPhone(t)) return true;
   if (HOST_LINE_PATTERNS.some(p => p.test(t))) return true;
   if (isHostEmail(t) || isInternalEmail(t)) return true;
   if (t.includes(LANDLORD.address1) || t.includes(LANDLORD.phoneClaire?.slice(0, 10))) return true;
@@ -72,7 +109,7 @@ export function isHostContentLine(line) {
   return false;
 }
 
-export function stripQuotedReply(text) {
+export function stripQuotedReply(text, { minKeep = 0 } = {}) {
   if (!text) return '';
   const cuts = [
     /\nLe\s+.+\s+a\s+écrit\s*:/i,
@@ -85,7 +122,8 @@ export function stripQuotedReply(text) {
   let out = text;
   for (const p of cuts) {
     const idx = out.search(p);
-    if (idx > 80) out = out.slice(0, idx);
+    // Default: cut at first quote marker. Pass a higher minKeep to preserve short forwards.
+    if (idx >= minKeep) out = out.slice(0, idx);
   }
   return out.trim();
 }
@@ -137,8 +175,11 @@ export function extractPhone(text) {
   const labeled = text.match(
     /(?:t[ée]l[ée]phone|telephone|t[ée]l\.?|tel\.?|phone|mobile|mob\.?|gsm|portable)\s*(?:number|n[°o.]|nº|:|-)?\s*((?:\+|00)?\d[\d\s().\-]{6,18})/i,
   );
-  if (labeled && !isHostContentLine(labeled[1]) && isPlausiblePhone(labeled[1])) {
-    return labeled[1].replace(/\s+/g, ' ').trim();
+  if (labeled) {
+    const phone = cleanPhoneCapture(labeled[1]);
+    if (phone && !isHostPhone(phone) && !isHostContentLine(phone) && isPlausiblePhone(phone)) {
+      return phone;
+    }
   }
   const patterns = [
     /(?:\+33|0033)[\s.-]?(?:\d[\s.-]?){9,10}/,
@@ -147,12 +188,34 @@ export function extractPhone(text) {
     /(?:\+44|0044)[\s.-]?(?:\d[\s.-]?){9,12}/,
     /(?:\+49|0049)[\s.-]?(?:\d[\s.-]?){9,13}/,
     /(?:\+41|0041)[\s.-]?(?:\d[\s.-]?){8,11}/,
+    // FR national only if clearly labeled context already failed — still reject host.
+    /(?:^|[^\d])((?:0[67])(?:[\s.-]?\d{2}){4})(?!\d)/,
   ];
   for (const p of patterns) {
     const m = text.match(p);
-    if (m && !isHostContentLine(m[0]) && isPlausiblePhone(m[0])) return m[0].replace(/\s+/g, ' ').trim();
+    const raw = m?.[1] || m?.[0];
+    if (!raw) continue;
+    const phone = cleanPhoneCapture(raw);
+    if (phone && !isHostPhone(phone) && !isHostContentLine(phone) && isPlausiblePhone(phone)) {
+      return phone;
+    }
   }
   return '';
+}
+
+/** Guest street address — reject host prompts like "adresse postale et vos numéros". */
+export function isPlausibleGuestAddress(value) {
+  if (!value) return false;
+  const s = String(value).replace(/\s+/g, ' ').trim();
+  if (s.length < 10 || s.length > 120) return false;
+  if (/[?]{2,}/.test(s)) return false;
+  if (isHostContentLine(s)) return false;
+  if (/(?:num[eé]ros?|t[eé]l[eé]phone|portable|e-?mails?|coordonn|postale et|vos num|ci-joint|pi[eè]ce jointe)/i.test(s)) {
+    return false;
+  }
+  // Real addresses almost always include a digit (street no / postal).
+  if (!/\d/.test(s)) return false;
+  return true;
 }
 
 export function extractEmailFromBody(text, contactEmail) {
@@ -277,7 +340,9 @@ export function extractCoordinatesFromText(text, contactEmail) {
 export function mergeExtractedFields(base, extracted) {
   if (!extracted) return base;
   const out = { ...base };
-  if (extracted.phone && !isHostContentLine(extracted.phone)) out.phone = extracted.phone;
+  if (extracted.phone && !isHostPhone(extracted.phone) && !isHostContentLine(extracted.phone)) {
+    out.phone = extracted.phone;
+  }
   if (extracted.address) out.address = extracted.address;
   if (extracted.postalCode) {
     out.postalCode = extracted.city && !extracted.postalCode.includes(extracted.city)
