@@ -3,8 +3,11 @@
  * Usage: node backend/test-e2e.js [baseUrl]
  */
 
+import 'dotenv/config';
+
 const BASE = process.argv[2] || process.env.API_BASE || 'https://chalet-alpicois-dash.vercel.app';
 const MICHAEL_ID = 'mqb2f5k8bs6z';
+let adminToken = '';
 
 const checks = [];
 
@@ -12,8 +15,10 @@ function check(name, fn) {
   checks.push({ name, fn });
 }
 
-async function get(path, headers = {}) {
-  const res = await fetch(`${BASE}${path}`, { headers });
+async function get(path, headers = {}, authenticated = true) {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: authenticated && adminToken ? { Authorization: `Bearer ${adminToken}`, ...headers } : headers,
+  });
   const text = await res.text();
   let json;
   try {
@@ -22,6 +27,18 @@ async function get(path, headers = {}) {
     json = null;
   }
   return { status: res.status, json, text };
+}
+
+async function login() {
+  const password = process.env.ADMIN_TEST_PASSWORD || process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET;
+  if (!password) throw new Error('ADMIN_TEST_PASSWORD ou ADMIN_PASSWORD requis pour les tests E2E privés');
+  const res = await fetch(`${BASE}/api/admin/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password, actor: 'gilles' }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.token) throw new Error(`connexion admin E2E refusée (${res.status})`);
+  adminToken = json.token;
 }
 
 check('GET /api/health → ok + config', async () => {
@@ -58,7 +75,7 @@ check('GET /api/contacts → liste', async () => {
 });
 
 check('GET /api/doubts sans auth → 401', async () => {
-  const { status } = await get('/api/doubts?season=2026-2027');
+  const { status } = await get('/api/doubts?season=2026-2027', {}, false);
   if (status !== 401) throw new Error(`expected 401, got ${status}`);
 });
 
@@ -154,17 +171,17 @@ check('GET /api/signals/recent → liste', async () => {
 });
 
 check('GET /api/calendar?refresh=1 sans auth → 401', async () => {
-  const { status } = await get('/api/calendar?season=2026-2027&refresh=1');
+  const { status } = await get('/api/calendar?season=2026-2027&refresh=1', {}, false);
   if (status !== 401) throw new Error(`expected 401, got ${status}`);
 });
 
 check('GET /api/cron/refresh sans auth → 401', async () => {
-  const { status } = await get('/api/cron/refresh');
+  const { status } = await get('/api/cron/refresh', {}, false);
   if (status !== 401) throw new Error(`expected 401, got ${status}`);
 });
 
 check('GET /api/coherence/report sans auth → 401', async () => {
-  const { status } = await get('/api/coherence/report?season=2026-2027');
+  const { status } = await get('/api/coherence/report?season=2026-2027', {}, false);
   if (status !== 401) throw new Error(`expected 401, got ${status}`);
 });
 
@@ -176,6 +193,7 @@ check('Finance — pas de ligne cancelled', async () => {
 
 async function run() {
   console.log(`\nE2E API (readonly) — ${BASE}\n`);
+  await login();
   let passed = 0;
   let failed = 0;
   for (const c of checks) {
