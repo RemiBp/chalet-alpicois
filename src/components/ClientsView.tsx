@@ -17,7 +17,7 @@ import {
 import type { InquiryEmailPreview } from '../data';
 import { extractInquiryFromText } from '../lib/extractInquiry';
 import { displayContactName, splitContactNameFields } from '../lib/formatName';
-import { emailBodyPreview, isGarbageEmailBody, classifyEmailContent, isCondensedEmail, safeEmailBodyPreview } from '../lib/cleanEmailBody';
+import { emailBodyPreview, isGarbageEmailBody, classifyEmailContent, isCondensedEmail, safeCleanEmailBody } from '../lib/cleanEmailBody';
 import { toDateInputValue } from '../lib/dateInput';
 import { peekContactsCache } from '../lib/contactsCache';
 import { routes } from '../lib/routes';
@@ -299,7 +299,7 @@ function ConversationThread({ contactId, focusEmailId }: { contactId: string; fo
                     </div>
                   </div>
                 ) : (
-                  safeEmailBodyPreview(email.bodyText || '', 4000) || '(vide)'
+                  safeCleanEmailBody(email.bodyText || '').slice(0, 4000) || '(vide)'
                 )}
               </div>
             )}
