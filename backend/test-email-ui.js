@@ -86,6 +86,18 @@ if (extractedNested !== 'Bonjour, voici le message imbriqué.') {
 }
 console.log('✅ extractBodyText — multipart imbriqué sans pièce jointe brute');
 
+const divOnlyHtml = Buffer.from([
+  'Content-Type: text/html; charset=utf-8', '',
+  '<div>Bonjour</div><div>Merci pour notre échange téléphonique</div>',
+  '<div>Voici comme convenu notre adresse</div><div>Clemence Panet</div>',
+].join('\r\n'));
+const extractedDivOnly = extractBodyText(divOnlyHtml);
+if (!extractedDivOnly.includes('téléphonique\nVoici') || !extractedDivOnly.includes('adresse\nClemence')) {
+  console.error(`❌ blocs HTML div mal séparés: ${extractedDivOnly}`);
+  process.exit(1);
+}
+console.log('✅ extractBodyText — blocs HTML div séparés par des retours ligne');
+
 try {
   const db = new Database(dbPath, { readonly: true });
   const rows = db.prepare(`

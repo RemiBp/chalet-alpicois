@@ -8,6 +8,7 @@ import { extractBodyText } from './email-body.js';
 
 const dbPath = process.env.DB_PATH;
 const apply = process.argv.includes('--apply');
+const all = process.argv.includes('--all');
 const limitArg = process.argv.find(arg => arg.startsWith('--limit='));
 const limit = limitArg ? Math.max(1, Number(limitArg.split('=')[1]) || 1) : 1000;
 if (!dbPath) throw new Error('DB_PATH requis');
@@ -30,7 +31,7 @@ const rows = db.prepare(`
   FROM emails
   WHERE uid IS NOT NULL AND mailbox IS NOT NULL
   ORDER BY date DESC
-`).all().filter(row => gluedPattern.test(row.body_text || '') || technicalPattern.test(row.body_text || '')).slice(0, limit);
+`).all().filter(row => all || gluedPattern.test(row.body_text || '') || technicalPattern.test(row.body_text || '')).slice(0, limit);
 
 const client = new ImapFlow({
   host: process.env.IMAP_HOST || 'imap.hostinger.com',
@@ -40,7 +41,7 @@ const client = new ImapFlow({
   logger: false,
 });
 const update = db.prepare('UPDATE emails SET body_text = ? WHERE id = ?');
-const report = { candidates: rows.length, fetched: 0, improved: 0, unchanged: 0, errors: 0, errorIds: [], applied: apply };
+const report = { candidates: rows.length, fetched: 0, improved: 0, unchanged: 0, errors: 0, errorIds: [], applied: apply, all };
 
 await client.connect();
 for (const mailbox of [...new Set(rows.map(row => row.mailbox))]) {
@@ -55,7 +56,11 @@ for (const mailbox of [...new Set(rows.map(row => row.mailbox))]) {
         const fresh = extractBodyText(source);
         const improved = fresh.length >= 20
           && !gluedPattern.test(fresh)
-          && (issues(fresh) < issues(row.body_text) || fresh.length > String(row.body_text || '').length * 1.2);
+          && (
+            issues(fresh) < issues(row.body_text)
+            || fresh.length > String(row.body_text || '').length * 1.2
+            || (all && fresh !== row.body_text && issues(fresh) <= issues(row.body_text) && !technicalPattern.test(fresh))
+          );
         if (improved) {
           if (apply) update.run(fresh, row.id);
           report.improved++;
