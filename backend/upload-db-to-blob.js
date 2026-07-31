@@ -11,7 +11,7 @@ const ROOT = join(__dirname, '..');
 const BLOB_KEY = 'alpicois-emails.db';
 
 function resolveDb() {
-  for (const p of [join(ROOT, 'emails.db'), join(__dirname, 'emails.db')]) {
+  for (const p of [process.env.DB_PATH, join(ROOT, 'emails.db'), join(__dirname, 'emails.db')].filter(Boolean)) {
     if (existsSync(p)) return p;
   }
   return null;

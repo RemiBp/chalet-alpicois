@@ -9,6 +9,7 @@
     "parse": "node parse-emails.js",
     "format-names": "node format-names.js",
     "format-names:dry": "node format-names.js --dry-run",
+    "repair-email-bodies": "node repair-email-bodies-imap.js",
     "upload-db-blob": "node upload-db-to-blob.js",
     "refresh": "node refresh-pipeline.js",
     "test:coherence": "node test-coherence.js",

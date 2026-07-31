@@ -136,9 +136,9 @@ export function extractWpFormsPlainText(html) {
   while ((m = fieldRe.exec(s)) !== null) {
     const label = cleanBody(m[1]);
     const value = cleanBody(m[2].replace(/<br\s*\/?>/gi, '\n'));
-    if (label && value) fields.push(`${label}: ${value}`);
+    if (label && value) fields.push(`${label}: ${formatReadableText(value)}`);
   }
-  if (fields.length >= 1) return fields.join('\n');
+  if (fields.length >= 1) return formatReadableText(fields.join('\n'));
 
   // Fallback when HTML structure was already partially flattened.
   const plain = cleanBody(s)
@@ -203,8 +203,11 @@ function cleanBody(str) {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
     .replace(/&nbsp;/gi, ' ')
     .replace(/\r\n/g, '\n')
+    .replace(/^[ \t]+/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/r�servation/gi, 'réservation')
@@ -218,7 +221,107 @@ function cleanBody(str) {
     .replace(/pi�ce/gi, 'pièce')
     .replace(/identit�/gi, 'identité')
     .replace(/t�l/gi, 'tél')
+    .replace(/Dýtails/gi, 'Détails')
+    .replace(/sýjour/gi, 'séjour')
+    .replace(/býbý/gi, 'bébé')
+    .replace(/fývrier/gi, 'février')
+    .replace(/prýciser/gi, 'préciser')
+    .replace(/Amýlie/gi, 'Amélie')
+    .replace(/Rýpondre/gi, 'Répondre')
+    .replace(/trýs/gi, 'très')
+    .replace(/bientýt/gi, 'bientôt')
+    .replace(/L'ýquipe/gi, "L'équipe")
+    .replace(/Accýs/gi, 'Accès')
+    .replace(/gýnýrales/gi, 'générales')
+    .replace(/cýtý/gi, 'côté')
+    .replace(/journýe/gi, 'journée')
+    .replace(/prýcýdents/gi, 'précédents')
+    .replace(/intýrýt/gi, 'intérêt')
+    .replace(/rýservations/gi, 'réservations')
+    .replace(/annýe/gi, 'année')
+    .replace(/ýtait/gi, 'était')
+    .replace(/rýponse/gi, 'réponse')
+    .replace(/aprýs/gi, 'après')
+    .replace(/sýlectionný/gi, 'sélectionné')
+    .replace(/dýjý/gi, 'déjà')
+    .replace(/recherchýes/gi, 'recherchées')
+    .replace(/fývr\./gi, 'févr.')
+    .replace(/oý/gi, 'où')
+    .replace(/(^|\s)ý(?=\s|$)/g, '$1')
+    .replace(/^WPForms\s*/i, '')
     .trim();
+}
+
+function formatReadableText(text) {
+  return String(text || '')
+    .replace(/\b(Bien\s+[àa]\s+vous|Cordialement|Best regards)(?=[A-ZÀ-ÖØ-Þ])/gi, '$1\n')
+    .replace(/([.!?)])(?=[A-ZÀ-ÖØ-Þ])/g, '$1\n')
+    .replace(/:\s*-\s*/g, ':\n- ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Keep the newly-written HTML and drop nested reply history before form detection. */
+function htmlBeforeQuotedHistory(html) {
+  if (!html) return '';
+  const markers = [
+    /<div[^>]+class=["'][^"']*(?:hmail-quote-container|gmail_quote|yahoo_quoted|moz-cite-prefix)[^"']*["'][^>]*>/i,
+    /<div[^>]+data-qa=["']message-reply-attribution["'][^>]*>/i,
+    /<blockquote\b/i,
+  ];
+  let cut = html.length;
+  for (const marker of markers) {
+    const index = html.search(marker);
+    if (index >= 0 && index < cut) cut = index;
+  }
+  if (cut === html.length) return html;
+  const fresh = html.slice(0, cut);
+  return cleanHtmlBody(fresh).length >= 20 ? fresh : html;
+}
+
+function cleanHtmlBody(html) {
+  return formatReadableText(cleanBody(String(html || '').replace(/\r?\n/g, ' '))
+    .replace(/\b(dimanche|samedi|vendredi|jeudi|mercredi|mardi|lundi)(?=\d)/gi, '$1 ')
+    .replace(/([A-Za-zÀ-ÿ])(?=\d{8,})/g, '$1\n')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .trim());
+}
+
+function splitMimeHeadersBody(section) {
+  const source = String(section || '');
+  const separator = source.match(/\r?\n\r?\n/);
+  if (!separator || separator.index == null) return { headers: '', body: source };
+  const splitAt = separator.index;
+  return {
+    headers: source.slice(0, splitAt).replace(/\r?\n[ \t]+/g, ' '),
+    body: source.slice(splitAt + separator[0].length),
+  };
+}
+
+function collectMimeTextParts(section, out, depth = 0) {
+  if (!section || depth > 8) return;
+  const { headers, body } = splitMimeHeadersBody(section);
+  const contentType = headers.match(/^Content-Type:\s*([^;\r\n]+)/im)?.[1]?.trim().toLowerCase() || '';
+  const boundary = headers.match(/boundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/i)?.slice(1).find(Boolean);
+  if (contentType.startsWith('multipart/') && boundary) {
+    const delimiter = new RegExp(`(?:^|\r?\n)--${escapeRegex(boundary)}(?:--)?(?:\r?\n|$)`);
+    for (const part of body.split(delimiter)) {
+      if (part.trim()) collectMimeTextParts(part, out, depth + 1);
+    }
+    return;
+  }
+  if (contentType !== 'text/plain' && contentType !== 'text/html') return;
+  const transfer = headers.match(/^Content-Transfer-Encoding:\s*([^\s;]+)/im)?.[1]?.toLowerCase() || '';
+  let decoded = body.replace(/\r?\n--\s*$/, '').trim();
+  if (transfer === 'quoted-printable') decoded = decodeQuotedPrintable(decoded);
+  else if (transfer === 'base64') decoded = decodeBase64Body(decoded);
+  if (decoded) (contentType === 'text/plain' ? out.plain : out.html).push(decoded);
+}
+
+function extractRecursiveMimeText(raw) {
+  const out = { plain: [], html: [] };
+  collectMimeTextParts(raw, out);
+  return out;
 }
 
 /**
@@ -232,6 +335,25 @@ export function extractBodyText(sourceBuffer) {
       raw = decodeBytesBestEffort(sourceBuffer);
     } catch {
       raw = sourceBuffer.toString('utf-8');
+    }
+
+    const recursive = extractRecursiveMimeText(raw);
+    if (recursive.plain.length || recursive.html.length) {
+      const plain = recursive.plain.join('\n\n');
+      const html = recursive.html.join('\n\n');
+      const freshHtml = htmlBeforeQuotedHistory(html);
+      if (freshHtml !== html) {
+        const freshText = cleanHtmlBody(freshHtml);
+        if (freshText.length >= 20) return freshText.substring(0, 50000);
+      }
+      if (/WPForms|field-value|@media only screen/i.test(freshHtml || plain)) {
+        const form = extractWpFormsPlainText(freshHtml || plain);
+        if (form.length >= 20) return form.substring(0, 50000);
+      }
+      const cleanPlain = cleanBody(plain);
+      if (cleanPlain.length >= 20) return cleanPlain.substring(0, 50000);
+      const cleanHtml = cleanHtmlBody(html);
+      if (cleanHtml.length >= 20) return cleanHtml.substring(0, 50000);
     }
 
     const boundaryMatch = raw.match(/boundary="?([^"\s;]+)"?/i);
@@ -283,9 +405,14 @@ export function extractBodyText(sourceBuffer) {
 
     const plainJoined = textPlainParts.join('\n\n');
     const htmlJoined = textHtmlParts.join('\n\n');
+    const freshHtml = htmlBeforeQuotedHistory(htmlJoined);
+    if (freshHtml !== htmlJoined) {
+      const freshText = cleanHtmlBody(freshHtml);
+      if (freshText.length >= 20) return freshText.substring(0, 50000);
+    }
     // WPForms / HTML-only notifications: prefer structured field extraction.
-    if (/WPForms|field-value|@media only screen/i.test(htmlJoined || plainJoined)) {
-      const fromHtml = extractWpFormsPlainText(htmlJoined || plainJoined);
+    if (/WPForms|field-value|@media only screen/i.test(freshHtml || plainJoined)) {
+      const fromHtml = extractWpFormsPlainText(freshHtml || plainJoined);
       if (fromHtml.length > 40) return fromHtml.substring(0, 50000);
     }
     if (plainJoined.trim().length >= 20) {
@@ -294,7 +421,7 @@ export function extractBodyText(sourceBuffer) {
     if (htmlJoined) {
       const fromHtml = extractWpFormsPlainText(htmlJoined);
       if (fromHtml.length > 20) return fromHtml.substring(0, 50000);
-      return cleanBody(htmlJoined).substring(0, 50000);
+      return cleanHtmlBody(htmlJoined).substring(0, 50000);
     }
     return cleanBody(plainJoined).substring(0, 50000);
   } catch {

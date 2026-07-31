@@ -21,6 +21,15 @@ const MOJIBAKE: [string, string][] = [
   ['â€™', "'"], ['â€œ', '"'], ['â€\u009d', '"'],
   ['â€"', '—'], ['â€"', '–'], ['â‚¬', '€'],
   ['Â«', '«'], ['Â»', '»'], ['Â ', ' '],
+  ['Dýtails', 'Détails'], ['sýjour', 'séjour'], ['býbý', 'bébé'],
+  ['fývrier', 'février'], ['prýciser', 'préciser'], ['Amýlie', 'Amélie'],
+  ['Rýpondre', 'Répondre'], ['trýs', 'très'], ['bientýt', 'bientôt'],
+  ["L'ýquipe", "L'équipe"], ['Accýs', 'Accès'], ['gýnýrales', 'générales'],
+  ['cýtý', 'côté'], ['journýe', 'journée'], ['prýcýdents', 'précédents'],
+  ['intýrýt', 'intérêt'], ['rýservations', 'réservations'], ['annýe', 'année'],
+  ['ýtait', 'était'], ['rýponse', 'réponse'], ['aprýs', 'après'],
+  ['sýlectionný', 'sélectionné'], ['dýjý', 'déjà'], ['recherchýes', 'recherchées'],
+  ['fývr.', 'févr.'], ['oý', 'où'],
 ];
 
 function decodeQuotedPrintable(str: string): string {
@@ -205,7 +214,8 @@ function processEmailBodyRaw(raw: string): string {
     text = stripMimeArtifacts(text);
   }
 
-  return fixMojibake(text)
+  const cleaned = fixMojibake(text)
+    .replace(/(^|\s)ý(?=\s|$)/g, '$1')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n\n')
@@ -216,12 +226,43 @@ function processEmailBodyRaw(raw: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
     .replace(/&nbsp;/gi, ' ')
     .replace(/&[a-zA-Z]+;/g, '')
     .replace(/\ufffd+/g, ' ')
     .replace(/\r\n/g, '\n')
+    .replace(/^[ \t]+/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]+/g, ' ')
+    .trim();
+  return formatStructuredText(stripQuotedHistory(cleaned));
+}
+
+function stripQuotedHistory(text: string): string {
+  const markers = [
+    /\s+Le\s+(?:lun\.|mar\.|mer\.|jeu\.|ven\.|sam\.|dim\.|\d{1,2})[^\n]{0,180}?\s+a\s+écrit\s*:/i,
+    /\s+On\s+[^\n]{0,180}?\s+wrote\s*:/i,
+    /\n\s*-{3,}\s*(?:Original Message|Forwarded message)\s*-{3,}/i,
+    /\n\s*(?:De|From)\s*:\s*[^\n]+\n/i,
+  ];
+  let cut = text.length;
+  for (const marker of markers) {
+    const index = text.search(marker);
+    if (index >= 0 && index < cut) cut = index;
+  }
+  return text.slice(0, cut).trim();
+}
+
+function formatStructuredText(text: string): string {
+  return text
+    .replace(/([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?=(?:Votre\s+message|Your\s+Message|Message)\s*:)/gi, '$1\n')
+    .replace(/([^\s\n])(?=(?:Votre\s+nom|Email|Votre\s+message|Your\s+Message|Message)\s*:)/gi, '$1\n')
+    .replace(/\b(Bonjour|Bonsoir)(?=[A-ZÀ-ÖØ-Þ])/g, '$1\n')
+    .replace(/\b(Bien\s+[àa]\s+vous|Cordialement|Best regards)(?=[A-ZÀ-ÖØ-Þ])/gi, '$1\n')
+    .replace(/([.!?])(?=[A-ZÀ-ÖØ-Þ])/g, '$1\n')
+    .replace(/:\s*-\s*/g, ':\n- ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
