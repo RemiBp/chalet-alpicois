@@ -11,6 +11,7 @@ import { isNoiseEmail } from './price-extract.js';
 import { cleanStoredBodyText } from './email-body.js';
 import {
   extractPhone,
+  normalizePhoneDigits,
   isPlausiblePhone,
   isHostPhone,
   isPlausibleGuestAddress,
@@ -694,6 +695,140 @@ export function resolveSyncProposals(db, decisions, actor = 'gilles') {
   });
 
   return results;
+}
+
+function normalizedProposalValue(field, proposed) {
+  if (field === 'phone') return normalizePhoneDigits(proposed);
+  if (field === 'address') return String(proposed || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (proposed && typeof proposed === 'object') {
+    return JSON.stringify(Object.fromEntries(Object.entries(proposed).sort(([a], [b]) => a.localeCompare(b))));
+  }
+  return JSON.stringify(proposed);
+}
+
+function proposalGroupKey(row, payload) {
+  return [row.contact_id, row.entity_type, payload.field, payload.checkIn || '', payload.checkOut || ''].join('|');
+}
+
+function proposalAlreadyApplied(db, row, payload) {
+  if (!row.contact_id) return false;
+  if (payload.field === 'phone') {
+    const contact = db.prepare('SELECT phone FROM contacts WHERE id = ?').get(row.contact_id);
+    return Boolean(contact?.phone)
+      && normalizePhoneDigits(contact.phone) === normalizePhoneDigits(payload.proposed);
+  }
+  if (payload.field === 'address') {
+    const contact = db.prepare('SELECT address FROM contacts WHERE id = ?').get(row.contact_id);
+    return Boolean(contact?.address)
+      && normalizedProposalValue('address', contact.address) === normalizedProposalValue('address', payload.proposed);
+  }
+  if (payload.field === 'groupComposition') {
+    const contact = db.prepare('SELECT profile_json FROM contacts WHERE id = ?').get(row.contact_id);
+    let profile = {};
+    try { profile = JSON.parse(contact?.profile_json || '{}'); } catch { /* ignore */ }
+    return Number(profile.typicalAdults || 0) === Number(payload.proposed?.typicalAdults || 0)
+      && Number(profile.typicalChildren || 0) === Number(payload.proposed?.typicalChildren || 0);
+  }
+  if (payload.checkIn && payload.checkOut) {
+    return progressAlreadyHas(
+      getStayProgress(db, row.contact_id, payload.checkIn, payload.checkOut),
+      payload.field,
+      payload.proposed,
+    );
+  }
+  return false;
+}
+
+/**
+ * Safely process the whole pending queue:
+ * - archive soft mail reviews;
+ * - approve valid, unambiguous concrete updates;
+ * - reject exact duplicates / invalid records;
+ * - keep conflicting values pending for a human decision.
+ */
+export function autoResolvePendingProposals(db, actor = 'gilles') {
+  ensureValidationColumn(db);
+  const rows = db.prepare(`
+    SELECT * FROM audit_log
+    WHERE validation_status = 'pending' AND action = 'sync_proposal'
+    ORDER BY created_at DESC, id DESC
+    LIMIT 2000
+  `).all();
+  const parsed = rows.map(row => {
+    let payload = {};
+    try { payload = JSON.parse(row.payload_json || '{}'); } catch { /* handled as invalid */ }
+    return { row, payload };
+  });
+
+  const variantsByGroup = new Map();
+  for (const item of parsed) {
+    const { row, payload } = item;
+    if (payload.field === 'mailReview' || row.entity_type === 'mail_review') continue;
+    const key = proposalGroupKey(row, payload);
+    const variants = variantsByGroup.get(key) || new Set();
+    variants.add(normalizedProposalValue(payload.field, payload.proposed));
+    variantsByGroup.set(key, variants);
+  }
+
+  const decisions = [];
+  const seenExact = new Set();
+  const report = {
+    total: rows.length,
+    approved: 0,
+    archivedReviews: 0,
+    rejectedDuplicates: 0,
+    rejectedInvalid: 0,
+    alreadyApplied: 0,
+    heldConflicts: 0,
+  };
+
+  for (const { row, payload } of parsed) {
+    const field = payload.field;
+    if (field === 'mailReview' || row.entity_type === 'mail_review') {
+      decisions.push({ id: row.id, approved: false });
+      report.archivedReviews++;
+      continue;
+    }
+
+    const groupKey = proposalGroupKey(row, payload);
+    if ((variantsByGroup.get(groupKey)?.size || 0) > 1) {
+      report.heldConflicts++;
+      continue;
+    }
+
+    const contactExists = row.contact_id
+      && db.prepare('SELECT 1 FROM contacts WHERE id = ?').get(row.contact_id);
+    const progressField = row.entity_type === 'stay_progress' || row.entity_type === 'mail_sent'
+      || field in PROGRESS_LABELS;
+    const invalid = !field
+      || payload.proposed == null
+      || payload.proposed === ''
+      || !contactExists
+      || (field === 'phone' && (!isPlausiblePhone(payload.proposed) || isHostPhone(payload.proposed)))
+      || (field === 'address' && !isPlausibleGuestAddress(payload.proposed))
+      || (progressField && !['phone', 'address', 'groupComposition'].includes(field)
+        && (!payload.checkIn || !payload.checkOut));
+    if (invalid) {
+      decisions.push({ id: row.id, approved: false });
+      report.rejectedInvalid++;
+      continue;
+    }
+
+    const exactKey = `${groupKey}|${normalizedProposalValue(field, payload.proposed)}`;
+    if (seenExact.has(exactKey)) {
+      decisions.push({ id: row.id, approved: false });
+      report.rejectedDuplicates++;
+      continue;
+    }
+    seenExact.add(exactKey);
+
+    if (proposalAlreadyApplied(db, row, payload)) report.alreadyApplied++;
+    decisions.push({ id: row.id, approved: true });
+    report.approved++;
+  }
+
+  const results = decisions.length ? resolveSyncProposals(db, decisions, actor) : [];
+  return { ...report, results, pendingCount: countPendingProposals(db) };
 }
 
 function applyContactProfileProposal(db, contactId, payload, dates = null) {

@@ -47,7 +47,9 @@ import { isInternalEmail } from './host-filter.js';
 import { mergeContacts } from './merge-contacts.js';
 import { applyExtractedProfile } from './extract-profile.js';
 import { listAuditLog, appendAudit } from './audit-log.js';
-import { resolveSyncProposals, countPendingProposals, rejectPendingByField } from './sync-proposals.js';
+import {
+  resolveSyncProposals, countPendingProposals, rejectPendingByField, autoResolvePendingProposals,
+} from './sync-proposals.js';
 import { getDataDoubts } from './doubts.js';
 import { listStayProgressForContact, upsertStayProgress } from './stay-progress.js';
 
@@ -344,6 +346,11 @@ app.post('/api/audit/resolve', async (req, res) => {
   }
   try {
     const actor = adminActorFromReq(req);
+    if (req.body?.autoResolveAll === true) {
+      const out = autoResolvePendingProposals(db, actor);
+      await requirePersistDb();
+      return res.json({ ok: true, ...out });
+    }
     // Bulk dismiss soft mail-review cards without touching concrete stay/contact updates.
     if (req.body?.rejectField === 'mailReview' || req.body?.rejectAllMailReviews === true) {
       const out = rejectPendingByField(db, 'mailReview', actor);

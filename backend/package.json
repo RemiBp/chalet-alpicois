@@ -14,7 +14,7 @@
     "test:coherence": "node test-coherence.js",
     "test:coherence:ai": "node test-coherence.js --ai",
     "test:e2e": "node test-e2e.js",
-    "test:all": "node test-coherence.js && node test-imports.js && node test-email-ui.js && node test-e2e.js",
+    "test:all": "node test-coherence.js && node test-imports.js && node test-email-ui.js && node test-auto-resolve.js && node test-e2e.js",
     "api": "node api-server.js",
     "start": "node api-server.js"
   },

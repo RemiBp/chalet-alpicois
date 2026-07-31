@@ -392,6 +392,30 @@ export async function rejectAllMailReviewProposals(): Promise<{ ok: boolean; pen
   return { ok: data.ok, pendingCount: data.pendingCount ?? 0, rejected: data.rejected ?? 0 };
 }
 
+export interface AutoResolveAuditResult {
+  ok: boolean;
+  total: number;
+  approved: number;
+  archivedReviews: number;
+  rejectedDuplicates: number;
+  rejectedInvalid: number;
+  alreadyApplied: number;
+  heldConflicts: number;
+  pendingCount: number;
+}
+
+/** Safely process every pending proposal while preserving ambiguous conflicts. */
+export async function autoResolveAllAuditProposals(): Promise<AutoResolveAuditResult> {
+  const res = await apiAuthFetch(`${API_BASE}/audit/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ autoResolveAll: true }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({})) as { error?: string }).error || `Auto-resolve ${res.status}`);
+  const data = await res.json() as AutoResolveAuditResult;
+  invalidateContactsCache();
+  return data;
+}
+
 // ─── MAIL TEMPLATES & SUIVI ─────────────────────
 
 export interface MailTemplateContent {

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, User, Bot, RefreshCw, Check, X, Mail, CalendarDays, ChevronDown, ChevronRight } from 'lucide-react';
 import {
-  fetchAuditLog, resolveAuditProposals, rejectAllMailReviewProposals, type AuditEntry,
+  fetchAuditLog, resolveAuditProposals, rejectAllMailReviewProposals,
+  autoResolveAllAuditProposals, type AuditEntry,
 } from '../data';
 import { routes } from '../lib/routes';
 
@@ -164,6 +165,34 @@ export default function AuditHistoryPanel({
     }
   }
 
+  async function autoResolveAll() {
+    if (!isAdmin || submitting || pendingEntries.length === 0) return;
+    const ok = window.confirm(
+      `Traiter automatiquement les ${pendingEntries.length} propositions ?\n\n`
+      + `• ${pendingConcrete.length} mise(s) à jour concrète(s) seront validées si elles sont cohérentes.\n`
+      + `• ${pendingMailReviews.length} revue(s) mail seront archivées.\n`
+      + '• Les doublons seront écartés et les conflits resteront à valider manuellement.',
+    );
+    if (!ok) return;
+    setSubmitting(true);
+    setMsg(null);
+    try {
+      const res = await autoResolveAllAuditProposals();
+      setMsg(
+        `${res.approved} validée(s), ${res.archivedReviews} revue(s) archivée(s), `
+        + `${res.rejectedDuplicates + res.rejectedInvalid} écartée(s), `
+        + `${res.heldConflicts} conflit(s) laissé(s) en attente.`,
+      );
+      load();
+      onPendingResolved?.();
+      setPendingCount(res.pendingCount);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Erreur validation automatique');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   const filters: { id: SourceFilter; label: string }[] = [
     { id: 'automatic', label: `Automatique à valider${pendingCount ? ` (${pendingCount})` : ''}` },
     { id: 'all', label: 'Tout' },
@@ -174,6 +203,21 @@ export default function AuditHistoryPanel({
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
+        {filter === 'automatic' && pendingEntries.length > 0 && (
+          <button
+            type="button"
+            onClick={autoResolveAll}
+            disabled={submitting || loading}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8,
+              border: '1px solid rgba(5,150,105,0.35)', background: 'rgba(236,253,245,0.95)',
+              color: '#047857', fontSize: 11, fontWeight: 750, cursor: submitting ? 'wait' : 'pointer',
+            }}
+          >
+            {submitting ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            Tout valider automatiquement ({pendingEntries.length})
+          </button>
+        )}
         {filter === 'automatic' && pendingMailReviews.length > 0 && (
           <button
             type="button"
