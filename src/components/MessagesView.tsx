@@ -6,7 +6,8 @@ import {
   fetchContactMailTracking, updateContactMailTracking, type MailTemplate, type MailTrackingStep,
 } from '../data';
 import { displayContactName } from '../lib/formatName';
-import MailStepPreviewPanel, { loadStepPreview, type StepPreviewState } from './MailStepPreviewPanel';
+import MailStepPreviewPanel from './MailStepPreviewPanel';
+import { loadStepPreview, type StepPreviewState } from '../lib/mailStepPreview';
 
 type SubTab = 'library' | 'suivi';
 

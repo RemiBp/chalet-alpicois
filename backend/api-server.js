@@ -52,6 +52,29 @@ import { getDataDoubts } from './doubts.js';
 import { listStayProgressForContact, upsertStayProgress } from './stay-progress.js';
 
 const PORT = process.env.API_PORT || 3001;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+const loginAttempts = new Map();
+
+function requestIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function loginRateState(req) {
+  const now = Date.now();
+  if (loginAttempts.size > 1_000) {
+    for (const [key, state] of loginAttempts) {
+      if (now - state.startedAt >= LOGIN_WINDOW_MS) loginAttempts.delete(key);
+    }
+  }
+  const key = requestIp(req);
+  const current = loginAttempts.get(key);
+  if (!current || now - current.startedAt >= LOGIN_WINDOW_MS) {
+    return { key, state: { count: 0, startedAt: now } };
+  }
+  return { key, state: current };
+}
 
 function adminTokenFromReq(req) {
   return (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -97,7 +120,33 @@ async function persistAfterWrite() {
 }
 
 const app = express();
-app.use(cors());
+app.disable('x-powered-by');
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    try {
+      const { hostname, protocol } = new URL(origin);
+      const allowed = protocol === 'https:' && (
+        hostname === 'chalet-alpicois-dash.vercel.app'
+        || hostname === process.env.VERCEL_URL
+        || /^chalet-alpicois-dash(?:-[a-z0-9-]+)?-remibps-projects\.vercel\.app$/.test(hostname)
+      );
+      const local = (protocol === 'http:' || protocol === 'https:')
+        && (hostname === 'localhost' || hostname === '127.0.0.1');
+      return callback(null, allowed || local);
+    } catch {
+      return callback(null, false);
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+  maxAge: 86_400,
+}));
+app.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
 
 /** @type {import('better-sqlite3').Database | null} */
@@ -169,7 +218,7 @@ app.get('/api/health', (_req, res) => {
     imapConfigured: Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS),
     vercel: process.env.VERCEL === '1',
     blobKey: 'alpicois-emails.db',
-    blobAccess: process.env.BLOB_STORE_ACCESS === 'private' ? 'private' : 'public',
+    blobAccess: process.env.BLOB_STORE_ACCESS === 'public' ? 'public' : 'private',
     deepseek: isDeepSeekConfigured(),
     aiReconcileDryRun: process.env.AI_RECONCILE_DRY_RUN === '1',
   });
@@ -317,10 +366,18 @@ app.post('/api/admin/login', (req, res) => {
   if (!isAdminConfigured()) {
     return res.status(503).json({ error: 'ADMIN_PASSWORD non configuré sur le serveur' });
   }
+  const { key, state } = loginRateState(req);
+  if (state.count >= LOGIN_MAX_ATTEMPTS) {
+    const retryAfter = Math.max(1, Math.ceil((state.startedAt + LOGIN_WINDOW_MS - Date.now()) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Trop de tentatives — réessayez plus tard' });
+  }
   const { password, actor = 'gilles' } = req.body || {};
   if (!checkAdminPassword(password)) {
+    loginAttempts.set(key, { ...state, count: state.count + 1 });
     return res.status(401).json({ error: 'Mot de passe incorrect' });
   }
+  loginAttempts.delete(key);
   const safeActor = actor === 'claire' ? 'claire' : 'gilles';
   res.json({ token: createAdminToken(safeActor), expiresIn: '7d', actor: safeActor });
 });

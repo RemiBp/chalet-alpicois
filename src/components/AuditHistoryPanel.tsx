@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, User, Bot, RefreshCw, Check, X, Mail, CalendarDays, ChevronDown, ChevronRight } from 'lucide-react';
 import {
@@ -86,7 +86,7 @@ export default function AuditHistoryPanel({
   const [msg, setMsg] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true);
     const pendingOnly = filter === 'automatic';
     const source = filter === 'all' ? undefined : filter;
@@ -104,7 +104,7 @@ export default function AuditHistoryPanel({
       })
       .catch(() => setEntries([]))
       .finally(() => setLoading(false));
-  };
+  }, [filter]);
 
   useEffect(() => {
     if (focusPending) setFilter('automatic');
@@ -117,7 +117,7 @@ export default function AuditHistoryPanel({
       return;
     }
     load();
-  }, [filter, isAdmin]);
+  }, [isAdmin, load]);
 
   const pendingEntries = entries.filter(e => e.validationStatus === 'pending');
   const pendingMailReviews = pendingEntries.filter(e =>

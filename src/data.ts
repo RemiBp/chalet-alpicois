@@ -1185,7 +1185,7 @@ async function runDataRefresh(skipImap: boolean): Promise<RefreshReport> {
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error('Synchronisation expirée — relancez une sync des derniers mails.');
+      throw new Error('Synchronisation expirée — relancez une sync des derniers mails.', { cause: err });
     }
     throw err;
   } finally {

@@ -18,5 +18,12 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // These effects intentionally bridge async data sources and React state.
+      // Keep the correctness-focused Hooks rules while avoiding compiler-only
+      // diagnostics that reject established React 19 patterns in this app.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+    },
   },
 ])

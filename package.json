@@ -24,14 +24,14 @@
     "test": "npm run test:all --prefix backend",
     "lint": "eslint .",
     "preview": "vite preview",
-    "e2e:prod": "node scripts/e2e-prod-test.mjs"
+    "e2e:prod": "node backend/test-e2e.js https://chalet-alpicois-dash.vercel.app"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-router-dom": "^7.14.2",
+    "react-router-dom": "^7.18.0",
     "typescript": "~6.0.2",
     "vite": "^8.0.10"
   },

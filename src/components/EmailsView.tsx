@@ -58,7 +58,7 @@ function decodeQuotedPrintable(str: string): string {
   if (!str || !/=[0-9A-Fa-f]{2}/.test(str)) return str;
 
   // Soft line breaks: =\r\n, =\n → supprimer (continuation de ligne)
-  let decoded = str.replace(/=\r?\n/g, '');
+  const decoded = str.replace(/=\r?\n/g, '');
 
   // Remplacer les séquences =XX
   const bytes: number[] = [];

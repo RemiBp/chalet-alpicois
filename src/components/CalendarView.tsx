@@ -65,7 +65,7 @@ function buildDayGrid(weeks: CalendarWeek[], events: CalendarEvent[]) {
     const monthStart = cursor > firstOfMonth ? new Date(cursor) : firstOfMonth;
     const monthEnd = endDate < lastOfMonth ? endDate : new Date(lastOfMonth.getTime() + 86400000);
 
-    let weekdayOffset = (firstOfMonth.getDay() + 6) % 7;
+    const weekdayOffset = (firstOfMonth.getDay() + 6) % 7;
     const cells: typeof months[0]['cells'] = [];
     for (let i = 0; i < weekdayOffset; i++) cells.push({ day: null, events: [], blocked: false });
 
@@ -456,8 +456,8 @@ export default function CalendarView({ isAdmin = false }: {
   }
 
   const currentSeason = CHALET.seasons.find(s => s.season === SEASON) || CHALET.seasons[CHALET.seasons.length - 1];
-  const weeks = calendar?.weeks || [];
-  const events = calendar?.events || [];
+  const weeks = useMemo(() => calendar?.weeks || [], [calendar?.weeks]);
+  const events = useMemo(() => calendar?.events || [], [calendar?.events]);
   const stats = calendar?.stats;
   const dayGrid = useMemo(() => buildDayGrid(weeks, events), [weeks, events]);
   const selectedDayEvents = selectedDay ? eventsForDay(selectedDay, events) : [];

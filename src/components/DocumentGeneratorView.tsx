@@ -247,6 +247,9 @@ export default function DocumentGeneratorView({ mode, isAdmin = false, hideHeade
       refreshPreview(selectedId, buildOverrides({ ...baseForm, ...userEdits }));
     }, 500);
     return () => clearTimeout(t);
+    // baseForm is refreshed by this request; depending on it would loop forever.
+    // User edits are the deliberate trigger for a debounced server preview.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEdits, selectedId, refreshPreview]);
 
   const filtered = useMemo(() => {

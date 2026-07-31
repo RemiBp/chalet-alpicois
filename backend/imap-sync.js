@@ -104,7 +104,7 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
         lock = await client.getMailboxLock(mailboxPath);
 
         const envelope = meta.envelope;
-        if (!envelope) continue;
+        if (!envelope) throw new Error(`Enveloppe IMAP absente pour UID ${meta.uid}`);
 
         const sender = envelope.from?.[0];
         const senderName = sender?.name || sender?.address || 'Inconnu';
@@ -133,6 +133,9 @@ async function syncMailbox(db, client, mailboxPath, opts = {}) {
         if (!lock || lock.released) {
           try { lock = await client.getMailboxLock(mailboxPath); } catch { /* ignore */ }
         }
+        // Never advance the mailbox watermark past a failed UID. A later run can
+        // safely retry this message; successful upserts before it are idempotent.
+        break;
       }
     }
   } finally {

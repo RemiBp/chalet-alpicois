@@ -30,7 +30,7 @@ if (!process.env.BLOB_READ_WRITE_TOKEN) {
 const { put } = await import('@vercel/blob');
 const buf = readFileSync(dbPath);
 const result = await put(BLOB_KEY, buf, {
-  access: process.env.BLOB_STORE_ACCESS === 'private' ? 'private' : 'public',
+  access: process.env.BLOB_STORE_ACCESS === 'public' ? 'public' : 'private',
   addRandomSuffix: false,
   allowOverwrite: true,
   token: process.env.BLOB_READ_WRITE_TOKEN,

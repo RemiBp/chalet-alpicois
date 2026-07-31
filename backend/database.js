@@ -17,8 +17,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TMP_DB = '/tmp/emails.db';
 const PERSIST_SNAP = '/tmp/emails-persist-snap.db';
 const BLOB_KEY = 'alpicois-emails.db';
-/** Vercel Blob store access — use BLOB_STORE_ACCESS=private when the store is private. */
-const BLOB_ACCESS = process.env.BLOB_STORE_ACCESS === 'private' ? 'private' : 'public';
+/** Fail closed: database snapshots contain personal data and must never default to public. */
+const BLOB_ACCESS = process.env.BLOB_STORE_ACCESS === 'public' ? 'public' : 'private';
 
 let dbInstance = null;
 let initPromise = null;

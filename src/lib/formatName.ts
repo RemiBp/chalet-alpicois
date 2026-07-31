@@ -107,7 +107,7 @@ function fromEmailLocal(email: string) {
 }
 
 export function formatContactName(rawName: string, email = '') {
-  let name = (rawName || '').trim();
+  const name = (rawName || '').trim();
 
   if (isWellFormattedName(name) && !name.includes(' ET ')) {
     return { displayName: titleCaseName(name) };

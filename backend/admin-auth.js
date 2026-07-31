@@ -51,6 +51,9 @@ export function verifyAdminToken(token) {
 
 export function checkAdminPassword(password) {
   const expected = process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET;
-  if (!expected) return false;
-  return password === expected;
+  if (!expected || typeof password !== 'string') return false;
+  const actualBuffer = Buffer.from(password, 'utf8');
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  if (actualBuffer.length !== expectedBuffer.length) return false;
+  return timingSafeEqual(actualBuffer, expectedBuffer);
 }

@@ -1,16 +1,8 @@
 import { useState } from 'react';
 import { Mail, Send, Loader2, Check, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
-import type { MailTemplatePreview, MailTrackingStep } from '../data';
-import { createMailTemplateDraft, previewMailTemplate } from '../data';
-
-export type StepPreviewState = MailTemplatePreview & {
-  editingSubject: string;
-  editingBody: string;
-  attachToThread: boolean;
-  replyToEmailId: string | null;
-  draftSuccess: string | null;
-  showThread: boolean;
-};
+import type { MailTrackingStep } from '../data';
+import { createMailTemplateDraft } from '../data';
+import { loadStepPreview, type StepPreviewState } from '../lib/mailStepPreview';
 
 function fmtShortDate(iso: string) {
   if (!iso) return '—';
@@ -19,24 +11,6 @@ function fmtShortDate(iso: string) {
   } catch {
     return iso.slice(0, 10);
   }
-}
-
-export async function loadStepPreview(
-  contactId: string,
-  templateKey: string,
-  lang: 'fr' | 'en',
-  opts?: { attachToThread?: boolean; replyToEmailId?: string | null },
-): Promise<StepPreviewState> {
-  const p = await previewMailTemplate(contactId, templateKey, lang, opts);
-  return {
-    ...p,
-    editingSubject: p.subject,
-    editingBody: p.body,
-    attachToThread: p.attachToThread,
-    replyToEmailId: p.replyToEmailId,
-    draftSuccess: null,
-    showThread: false,
-  };
 }
 
 export default function MailStepPreviewPanel({

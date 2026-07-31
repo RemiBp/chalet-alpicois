@@ -25,7 +25,7 @@ const MOJIBAKE: [string, string][] = [
 
 function decodeQuotedPrintable(str: string): string {
   if (!str || !/=[0-9A-Fa-f]{2}/.test(str)) return str;
-  let decoded = str.replace(/=\r?\n/g, '');
+  const decoded = str.replace(/=\r?\n/g, '');
   const bytes: number[] = [];
   for (let i = 0; i < decoded.length; i++) {
     if (decoded[i] === '=' && i + 2 < decoded.length && /^[0-9A-Fa-f]{2}$/.test(decoded.substring(i + 1, i + 3))) {
@@ -132,7 +132,11 @@ function looksLikeEncryptedOrBinary(text: string): boolean {
   if (weird / sample.length > 0.12) return true;
   // Dense binary / misdecoded attachment: almost no whitespace, few real words
   if (sample.length > 40 && spaces < 3 && words < 3) return true;
-  if (text.length < 220 && asciiLetters < 12 && spaces < 4 && /[^\x09\x0A\x0D\x20-\x7E]/.test(sample)) return true;
+  const hasNonPrintableOrNonAscii = [...sample].some(char => {
+    const code = char.charCodeAt(0);
+    return (code < 32 && code !== 9 && code !== 10 && code !== 13) || code > 126;
+  });
+  if (text.length < 220 && asciiLetters < 12 && spaces < 4 && hasNonPrintableOrNonAscii) return true;
   if (text.length < 160 && asciiLetters < 8 && spaces < 2) return true;
   return false;
 }

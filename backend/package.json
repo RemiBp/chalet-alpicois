@@ -28,7 +28,7 @@
     "express": "^4.21.0",
     "imapflow": "^1.0.180",
     "jszip": "^3.10.1",
-    "nodemailer": "^8.0.11",
+    "nodemailer": "^9.0.3",
     "pizzip": "^3.2.0"
   }
 }
