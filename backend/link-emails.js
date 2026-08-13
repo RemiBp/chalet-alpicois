@@ -111,7 +111,10 @@ export function linkOrphanEmails(db) {
     SELECT e.*
     FROM emails e
     LEFT JOIN contacts c ON c.id = e.contact_id
-    WHERE e.contact_id IS NULL OR c.id IS NULL
+    WHERE (e.contact_id IS NULL OR c.id IS NULL)
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%junk%'
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%spam%'
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%indésirable%'
     ORDER BY e.date ASC
   `).all();
 

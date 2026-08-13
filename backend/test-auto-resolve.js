@@ -1,6 +1,18 @@
 import Database from 'better-sqlite3';
 import { ensureAuditTable } from './audit-log.js';
-import { autoResolvePendingProposals, countPendingProposals } from './sync-proposals.js';
+import { autoResolvePendingProposals, countPendingProposals, detectProgressHints } from './sync-proposals.js';
+
+const outboundInstructions = detectProgressHints(
+  'Rental agreement and appendices',
+  'Please find the rental agreement attached. It will also be necessary to provide an insurance certificate. A security deposit of 1000 EUR will be requested one week before arrival.',
+  'INBOX.Sent',
+);
+if (outboundInstructions.some(h => h.field === 'insuranceReceived')) {
+  throw new Error('Une demande sortante d’assurance ne doit pas valoir assurance reçue');
+}
+if (outboundInstructions.some(h => h.field === 'mailSteps' && h.proposed?.deposit_reminder_j7)) {
+  throw new Error('Une clause de caution du contrat ne doit pas valoir rappel J-7');
+}
 
 const db = new Database(':memory:');
 db.exec(`

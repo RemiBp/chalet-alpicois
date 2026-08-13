@@ -242,7 +242,8 @@ export function detectProgressHints(subject, bodyText, mailbox = 'INBOX') {
 
   // Contrat signé — ignore "merci de signer / en attente"
   if (
-    !requesting
+    !isSent
+    && !requesting
     && /contrat.{0,80}sign[eé]|sign[eé].{0,80}contrat|signed\s+contract|rental\s+agreement.{0,80}signed|read\s+and\s+approved|lu\s+et\s+approuv[eé]|contrat\s+de\s+location\s+sign/i.test(text)
   ) {
     hints.push({ field: 'contractSigned', proposed: true, label: 'Contrat signé (mail)', confidence: 'high' });
@@ -253,7 +254,8 @@ export function detectProgressHints(subject, bodyText, mailbox = 'INBOX') {
   }
 
   if (
-    !requesting
+    !isSent
+    && !requesting
     && /(?:attestation\s+(?:de\s+|d['’])?(?:garantie|assurance)|insurance\s+certificate|assurance\s+vill[eé]giature)/i.test(text)
     && /(?:ci-joint|pj|attach|re[cç]u|voici|envoy)/i.test(text)
   ) {
@@ -264,7 +266,7 @@ export function detectProgressHints(subject, bodyText, mailbox = 'INBOX') {
   {
     const idMention = /(?:pi[eè]ce|piece)\s+d['’ ]?identit[eé]|passeport|passport|identity\s+(?:card|document)|carte\s+d['’ ]?identit[eé]/i.test(text);
     const idReceivedCue = /(?:ci-joint|pj|attach|voici|re[cç]u|reçue|received).{0,80}(?:identit|passeport|passport)|(?:identit|passeport|passport).{0,60}(?:ci-joint|pj|attach|re[cç]u|reçue|voici)/i.test(text);
-    if (idMention && idReceivedCue && !requesting) {
+    if (!isSent && idMention && idReceivedCue && !requesting) {
       hints.push({ field: 'idReceived', proposed: true, label: "Pièce d'identité reçue", confidence: 'high' });
     }
   }
@@ -308,7 +310,7 @@ function detectSentMailStep(text) {
   if (/prix\s+de\s+la\s+semaine|tarif\s+pour\s+votre\s+semaine|rate\s+for\s+your\s+week/i.test(text)) return 'price_quote';
   if (/infos?\s+pour\s+le\s+contrat|information\s+for\s+the\s+rental\s+agreement|contrat.*annexes?.*facture/i.test(text)) return 'contract_info';
   if (/j-60|d-60|solde\s+à\s+r[eé]gler|balance\s+payment\s+reminder/i.test(text)) return 'balance_reminder_j60';
-  if (/j-7|d-7|caution\s+1\s*000|security\s+deposit/i.test(text)) return 'deposit_reminder_j7';
+  if (/j-7|d-7|rappel.{0,60}(?:caution|d[eé]p[oô]t\s+de\s+garantie)|(?:security\s+deposit).{0,40}reminder/i.test(text)) return 'deposit_reminder_j7';
   if (/j\+3|d\+3|retour\s+apr[eè]s\s+s[eé]jour|post-stay\s+feedback|how\s+was\s+your\s+stay/i.test(text)) return 'feedback_post_stay';
   return null;
 }
@@ -316,7 +318,9 @@ function detectSentMailStep(text) {
 function shouldAutoApplyHint(hint, email, text) {
   if (hint.confidence === 'high') return true;
   if (hint.field === 'mailSteps' && isSentMailbox(email.mailbox)) return true;
-  if (hint.field === 'groupComposition' && hint.proposed?.typicalAdults) return true;
+  if (hint.field === 'groupComposition' && hint.proposed?.typicalAdults) {
+    return !/normalement|provisoire|à\s+confirmer|confirmerai|probably|tentative|not\s+final/i.test(text);
+  }
   // Extra safety: deposit wording always auto
   if (hint.field === 'depositPaid' && /virement|acompte|deposit/i.test(text)) return true;
   return false;
@@ -337,6 +341,9 @@ export function scanEmailsForProposals(db, opts = {}) {
     FROM emails e
     JOIN contacts c ON c.id = e.contact_id
     WHERE e.contact_id IS NOT NULL AND e.date >= ? AND e.body_text != ''
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%junk%'
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%spam%'
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%indésirable%'
     ORDER BY e.date DESC
     LIMIT ?
   `).all(since.toISOString(), limit);

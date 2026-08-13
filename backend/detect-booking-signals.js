@@ -339,6 +339,9 @@ export function refreshBookingStatuses(db, opts = {}) {
     WHERE e.contact_id IS NOT NULL
       AND e.date >= ?
       AND e.body_text != ''
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%junk%'
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%spam%'
+      AND lower(COALESCE(e.mailbox, '')) NOT LIKE '%indésirable%'
     ORDER BY e.date ASC
     LIMIT ?
   `).all(sinceIso, limit);
